@@ -59,7 +59,7 @@ function injectHooks(cwd) {
   const data = readLocalSettings(cwd) || {};
   if (!data.hooks) data.hooks = {};
 
-  const events = { PreToolUse: 'working', Notification: 'waiting', Stop: 'done' };
+  const events = { PreToolUse: 'working', PermissionRequest: 'waiting', Notification: 'done', Stop: 'done' };
   for (const [event, status] of Object.entries(events)) {
     const list = data.hooks[event] || [];
     if (!list.some(isOurEntry)) {
