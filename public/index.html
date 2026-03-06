@@ -20,12 +20,14 @@
         <button class="menu-item">表示(V)</button>
         <div class="menu-dropdown">
           <button class="menu-dropdown-item" id="btn-rename-tab">タブ名変更</button>
+          <button class="menu-dropdown-item" id="btn-tasks">タスク一覧</button>
         </div>
       </div>
       <div class="menu-group">
         <button class="menu-item">プロジェクト(P)</button>
         <div class="menu-dropdown">
           <button class="menu-dropdown-item" id="btn-projects">プロジェクト管理</button>
+          <button class="menu-dropdown-item" id="btn-tasks-menu">タスク管理</button>
         </div>
       </div>
     </div>
@@ -39,16 +41,39 @@
       </div>
       <div id="sidebar" class="hidden">
         <div class="sidebar-header">
-          <span>プロジェクト管理</span>
+          <div class="sidebar-tabs">
+            <button class="sidebar-tab active" data-mode="projects">プロジェクト</button>
+            <button class="sidebar-tab" data-mode="tasks">タスク</button>
+          </div>
           <button id="btn-close-sidebar" title="閉じる">&times;</button>
         </div>
-        <form id="form-new-project" class="sidebar-form">
-          <input type="text" id="input-project-name" placeholder="プロジェクト名" required>
-          <input type="text" id="input-project-dir" placeholder="ディレクトリパス" required>
-          <small class="form-hint">※ Claude Codeを起動する作業ディレクトリ</small>
-          <button type="submit">登録</button>
-        </form>
-        <div id="project-list" class="sidebar-list"></div>
+        <div id="sidebar-projects">
+          <form id="form-new-project" class="sidebar-form">
+            <input type="text" id="input-project-name" placeholder="プロジェクト名" required>
+            <input type="text" id="input-project-dir" placeholder="ディレクトリパス" required>
+            <small class="form-hint">※ Claude Codeを起動する作業ディレクトリ</small>
+            <button type="submit">登録</button>
+          </form>
+          <div id="project-list" class="sidebar-list"></div>
+        </div>
+        <div id="sidebar-tasks" style="display:none;">
+          <div class="task-toolbar">
+            <div class="task-toolbar-row">
+              <select id="task-project-select"></select>
+              <button id="btn-refresh-tasks" class="btn-refresh" title="タスク一覧を更新">↻</button>
+            </div>
+            <div class="task-filters">
+              <label class="task-filter-check"><input type="checkbox" data-filter="todo" checked><span>未着手</span></label>
+              <label class="task-filter-check"><input type="checkbox" data-filter="in_progress" checked><span>進行中</span></label>
+              <label class="task-filter-check"><input type="checkbox" data-filter="done"><span>完了</span></label>
+            </div>
+          </div>
+          <div id="task-list" class="sidebar-list"></div>
+          <form id="form-new-task" class="sidebar-form">
+            <input type="text" id="input-task-title" placeholder="タスク名を入力..." required>
+            <button type="submit">追加</button>
+          </form>
+        </div>
       </div>
     </div>
   </div>
