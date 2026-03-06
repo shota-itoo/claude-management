@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Claude Code Web Terminal</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <div id="menu-bar">
+      <div class="menu-group">
+        <button class="menu-item">ファイル(F)</button>
+        <div class="menu-dropdown">
+          <button class="menu-dropdown-item" id="btn-new">新規ターミナル</button>
+        </div>
+      </div>
+      <div class="menu-group">
+        <button class="menu-item">表示(V)</button>
+        <div class="menu-dropdown">
+          <button class="menu-dropdown-item" id="btn-rename-tab">タブ名変更</button>
+        </div>
+      </div>
+      <div class="menu-group">
+        <button class="menu-item">プロジェクト(P)</button>
+        <div class="menu-dropdown">
+          <button class="menu-dropdown-item" id="btn-projects">プロジェクト管理</button>
+        </div>
+      </div>
+    </div>
+    <div id="main-area">
+      <div id="content-area">
+        <div id="tab-bar">
+          <div id="tabs"></div>
+          <button id="btn-new-tab" title="新規ターミナル">+</button>
+        </div>
+        <div id="terminal-container"></div>
+      </div>
+      <div id="sidebar" class="hidden">
+        <div class="sidebar-header">
+          <span>プロジェクト管理</span>
+          <button id="btn-close-sidebar" title="閉じる">&times;</button>
+        </div>
+        <form id="form-new-project" class="sidebar-form">
+          <input type="text" id="input-project-name" placeholder="プロジェクト名" required>
+          <input type="text" id="input-project-dir" placeholder="ディレクトリパス" required>
+          <small class="form-hint">※ Claude Codeを起動する作業ディレクトリ</small>
+          <button type="submit">登録</button>
+        </form>
+        <div id="project-list" class="sidebar-list"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Project Select Modal -->
+  <div id="project-select-modal" class="modal hidden">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content">
+      <div class="modal-header">
+        <span>プロジェクトを選択</span>
+        <button class="modal-close" title="閉じる">&times;</button>
+      </div>
+      <div id="modal-project-list" class="modal-body"></div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/socket.io-client@4.8.1/dist/socket.io.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
