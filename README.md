@@ -9,7 +9,7 @@
 npm start
 ```
 
-ブラウザで http://localhost:3000 を開く。
+ブラウザで http://localhost:3100 を開く。
 
 ## ステータス色
 
