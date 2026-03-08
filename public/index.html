@@ -28,6 +28,9 @@
         <div class="menu-dropdown">
           <button class="menu-dropdown-item" id="btn-projects">プロジェクト管理</button>
           <button class="menu-dropdown-item" id="btn-tasks-menu">タスク管理</button>
+          <div class="menu-dropdown-separator"></div>
+          <button class="menu-dropdown-item" id="btn-gantt">ガントチャート</button>
+          <button class="menu-dropdown-item" id="btn-kanban">カンバンボード</button>
         </div>
       </div>
     </div>
@@ -49,6 +52,7 @@
         </div>
         <div id="sidebar-projects">
           <form id="form-new-project" class="sidebar-form">
+            <input type="text" id="input-project-code" placeholder="プロジェクトコード (例: AISEC)" required pattern="[A-Za-z0-9_-]+" title="英数字、ハイフン、アンダースコアのみ">
             <input type="text" id="input-project-name" placeholder="プロジェクト名" required>
             <input type="text" id="input-project-dir" placeholder="ディレクトリパス" required>
             <small class="form-hint">※ Claude Codeを起動する作業ディレクトリ</small>
@@ -65,6 +69,7 @@
             <div class="task-filters">
               <label class="task-filter-check"><input type="checkbox" data-filter="todo" checked><span>未着手</span></label>
               <label class="task-filter-check"><input type="checkbox" data-filter="in_progress" checked><span>進行中</span></label>
+              <label class="task-filter-check"><input type="checkbox" data-filter="review" checked><span>レビュー</span></label>
               <label class="task-filter-check"><input type="checkbox" data-filter="done"><span>完了</span></label>
             </div>
           </div>
@@ -87,6 +92,79 @@
         <button class="modal-close" title="閉じる">&times;</button>
       </div>
       <div id="modal-project-list" class="modal-body"></div>
+    </div>
+  </div>
+
+  <!-- Project Edit Modal -->
+  <div id="project-edit-modal" class="modal hidden">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content" style="width:440px;">
+      <div class="modal-header">
+        <span>プロジェクト編集</span>
+        <button class="modal-close" title="閉じる">&times;</button>
+      </div>
+      <div class="modal-body">
+        <form id="form-edit-project" class="project-edit-form">
+          <input type="hidden" id="edit-project-id">
+          <div class="task-detail-field">
+            <label>プロジェクト名</label>
+            <input type="text" id="edit-project-name" class="task-detail-input" required>
+          </div>
+          <div class="task-detail-field">
+            <label>プロジェクトコード</label>
+            <input type="text" id="edit-project-code" class="task-detail-input" required pattern="[A-Za-z0-9_-]+" title="英数字、ハイフン、アンダースコアのみ">
+          </div>
+          <div class="task-detail-field">
+            <label>対象ディレクトリ</label>
+            <input type="text" id="edit-project-dir" class="task-detail-input" required>
+          </div>
+          <div class="task-detail-field">
+            <label>備考</label>
+            <textarea id="edit-project-notes" class="task-detail-textarea" rows="3"></textarea>
+          </div>
+          <div class="task-detail-actions">
+            <button type="button" class="task-detail-close" id="edit-project-cancel">キャンセル</button>
+            <button type="submit" class="task-detail-save">保存</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Gantt Chart Modal -->
+  <div id="gantt-modal" class="modal hidden">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content modal-large">
+      <div class="modal-header">
+        <span>ガントチャート</span>
+        <div class="modal-header-controls">
+          <select id="gantt-project-select" class="modal-select"></select>
+          <label class="gantt-filter-check"><input type="checkbox" id="gantt-show-no-date"><span>日付なしも表示</span></label>
+          <label class="gantt-filter-check"><input type="checkbox" id="gantt-hide-done" checked><span>完了を非表示</span></label>
+          <button id="gantt-add-task-btn" class="gantt-header-add-btn" title="タスク追加">+ タスク追加</button>
+          <button class="modal-close" title="閉じる">&times;</button>
+        </div>
+      </div>
+      <div class="modal-body" id="gantt-body">
+        <div id="gantt-container"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Kanban Board Modal -->
+  <div id="kanban-modal" class="modal hidden">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content modal-large">
+      <div class="modal-header">
+        <span>カンバンボード</span>
+        <div class="modal-header-controls">
+          <select id="kanban-project-select" class="modal-select"></select>
+          <button class="modal-close" title="閉じる">&times;</button>
+        </div>
+      </div>
+      <div class="modal-body" id="kanban-body">
+        <div id="kanban-container"></div>
+      </div>
     </div>
   </div>
 

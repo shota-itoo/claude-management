@@ -4,14 +4,33 @@ const { Server } = require('socket.io');
 const pty = require('node-pty');
 const path = require('path');
 const fs = require('fs');
+const multer = require('multer');
 const db = require('./db');
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
+const TMP_IMAGES_DIR = path.join(__dirname, 'tmp', 'images');
+
+// Multer storage configuration
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const taskDir = path.join(TMP_IMAGES_DIR, req.params.taskId);
+    fs.mkdirSync(taskDir, { recursive: true });
+    cb(null, taskDir);
+  },
+  filename: (req, file, cb) => {
+    const timestamp = Date.now();
+    const originalName = Buffer.from(file.originalname, 'latin1').toString('utf8');
+    cb(null, `${timestamp}_${originalName}`);
+  },
+});
+const upload = multer({ storage, limits: { fileSize: 50 * 1024 * 1024 } });
+
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
+app.use('/attachments', express.static(TMP_IMAGES_DIR));
 
 // Session store: Map<id, { pty, status, name, cwd, projectId }>
 const sessions = new Map();
@@ -22,8 +41,8 @@ const PORT = process.env.PORT || 3100;
 
 // --- Hooks injection into .claude/settings.local.json ---
 
-function ourHookEntry(status) {
-  return { matcher: '', hooks: [{ type: 'command', command: `node ${HOOK_SCRIPT} ${status}` }] };
+function ourHookEntry(status, event) {
+  return { matcher: '', hooks: [{ type: 'command', command: `node ${HOOK_SCRIPT} ${status} ${event}` }] };
 }
 
 function isOurEntry(entry) {
@@ -63,7 +82,7 @@ function injectHooks(cwd) {
   for (const [event, status] of Object.entries(events)) {
     const list = data.hooks[event] || [];
     if (!list.some(isOurEntry)) {
-      list.push(ourHookEntry(status));
+      list.push(ourHookEntry(status, event));
     }
     data.hooks[event] = list;
   }
@@ -176,9 +195,9 @@ curl -s http://localhost:${PORT}/api/projects/${projectId}/tasks
    curl -s -X PATCH http://localhost:${PORT}/api/tasks/{taskId} \\
      -H "Content-Type: application/json" -d '{"status":"in_progress"}'
 2. タスクの内容に従って作業を実施
-3. 完了後にステータスを「完了」に更新:
+3. 作業完了後にステータスを「レビュー待ち」に更新:
    curl -s -X PATCH http://localhost:${PORT}/api/tasks/{taskId} \\
-     -H "Content-Type: application/json" -d '{"status":"done"}'
+     -H "Content-Type: application/json" -d '{"status":"review"}'
 
 ## 新規タスク作成
 curl -s -X POST http://localhost:${PORT}/api/projects/${projectId}/tasks \\
@@ -187,7 +206,7 @@ curl -s -X POST http://localhost:${PORT}/api/projects/${projectId}/tasks \\
 ## タスク更新
 curl -s -X PATCH http://localhost:${PORT}/api/tasks/{taskId} \\
   -H "Content-Type: application/json" \\
-  -d '{"title":"新タイトル","description":"新説明","status":"todo|in_progress|done"}'
+  -d '{"title":"新タイトル","description":"新説明","status":"todo|in_progress|review|done"}'
 
 ## 子タスク作成
 curl -s -X POST http://localhost:${PORT}/api/projects/${projectId}/tasks \\
@@ -198,7 +217,8 @@ curl -s -X POST http://localhost:${PORT}/api/projects/${projectId}/tasks \\
 
 ## 重要
 - 作業開始前に必ずステータスを in_progress に更新すること
-- 完了後は必ずステータスを done に更新すること
+- 作業完了後は必ずステータスを review に更新すること（ユーザーレビュー待ち）
+- レビュー承認後、ユーザーまたはレビュワーが done に更新する
 `;
 }
 
@@ -333,20 +353,60 @@ app.get('/api/projects', (req, res) => {
 });
 
 app.post('/api/projects', (req, res) => {
-  const { name, directory } = req.body;
-  if (!name || !directory) {
-    return res.status(400).json({ error: 'name and directory are required' });
+  const { name, directory, code } = req.body;
+  if (!name || !directory || !code) {
+    return res.status(400).json({ error: 'name, directory and code are required' });
+  }
+  if (!/^[A-Za-z0-9_-]+$/.test(code)) {
+    return res.status(400).json({ error: 'code must be alphanumeric (a-z, 0-9, -, _)' });
   }
   if (!fs.existsSync(directory)) {
     return res.status(400).json({ error: 'Directory does not exist' });
   }
   try {
-    const result = db.prepare('INSERT INTO projects (name, directory) VALUES (?, ?)').run(name, directory);
+    const result = db.prepare('INSERT INTO projects (name, directory, code) VALUES (?, ?, ?)').run(name, directory, code);
     const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(result.lastInsertRowid);
     res.json(project);
   } catch (e) {
     if (e.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+      const existing = db.prepare('SELECT code FROM projects WHERE code = ?').get(code);
+      if (existing) return res.status(409).json({ error: 'Project code already exists' });
       return res.status(409).json({ error: 'Directory already registered' });
+    }
+    throw e;
+  }
+});
+
+app.patch('/api/projects/:id', (req, res) => {
+  const { id } = req.params;
+  const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(id);
+  if (!project) return res.status(404).json({ error: 'Project not found' });
+
+  const allowed = ['name', 'code', 'directory', 'notes'];
+  const updates = [];
+  const values = [];
+  for (const key of allowed) {
+    if (req.body[key] !== undefined) {
+      if (key === 'code' && !/^[A-Za-z0-9_-]+$/.test(req.body[key])) {
+        return res.status(400).json({ error: 'code must be alphanumeric (a-z, 0-9, -, _)' });
+      }
+      if (key === 'directory' && !fs.existsSync(req.body[key])) {
+        return res.status(400).json({ error: 'Directory does not exist' });
+      }
+      updates.push(`${key} = ?`);
+      values.push(req.body[key]);
+    }
+  }
+  if (updates.length === 0) return res.status(400).json({ error: 'No valid fields to update' });
+
+  values.push(id);
+  try {
+    db.prepare(`UPDATE projects SET ${updates.join(', ')} WHERE id = ?`).run(...values);
+    const updated = db.prepare('SELECT * FROM projects WHERE id = ?').get(id);
+    res.json(updated);
+  } catch (e) {
+    if (e.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+      return res.status(409).json({ error: 'Project code already exists' });
     }
     throw e;
   }
@@ -359,6 +419,15 @@ app.delete('/api/projects/:id', (req, res) => {
 });
 
 // --- Task API ---
+
+app.get('/api/tasks/all', (req, res) => {
+  const allTasks = db.prepare(
+    `SELECT t.*, p.name as project_name, p.code as project_code
+     FROM tasks t JOIN projects p ON t.project_id = p.id
+     ORDER BY t.project_id, t.sort_order ASC, t.created_at ASC`
+  ).all();
+  res.json(allTasks);
+});
 
 app.get('/api/projects/:projectId/tasks', (req, res) => {
   const { projectId } = req.params;
@@ -374,7 +443,7 @@ app.post('/api/projects/:projectId/tasks', (req, res) => {
   const project = db.prepare('SELECT id FROM projects WHERE id = ?').get(projectId);
   if (!project) return res.status(404).json({ error: 'Project not found' });
 
-  const { title, description, parent_id } = req.body;
+  const { title, description, parent_id, target_paths } = req.body;
   if (!title) return res.status(400).json({ error: 'title is required' });
 
   let depth = 0;
@@ -388,9 +457,11 @@ app.post('/api/projects/:projectId/tasks', (req, res) => {
   const maxOrder = db.prepare('SELECT MAX(sort_order) as max FROM tasks WHERE project_id = ? AND parent_id IS ?').get(projectId, parent_id || null);
   const sort_order = (maxOrder?.max ?? -1) + 1;
 
+  const targetPathsJson = Array.isArray(target_paths) ? JSON.stringify(target_paths) : null;
+
   const result = db.prepare(
-    'INSERT INTO tasks (project_id, parent_id, title, description, depth, sort_order) VALUES (?, ?, ?, ?, ?, ?)'
-  ).run(projectId, parent_id || null, title, description || '', depth, sort_order);
+    'INSERT INTO tasks (project_id, parent_id, title, description, depth, sort_order, target_paths) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  ).run(projectId, parent_id || null, title, description || '', depth, sort_order, targetPathsJson);
 
   const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(result.lastInsertRowid);
   io.emit('tasks.changed', { projectId: Number(projectId) });
@@ -402,13 +473,18 @@ app.patch('/api/tasks/:taskId', (req, res) => {
   const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
   if (!task) return res.status(404).json({ error: 'Task not found' });
 
-  const allowed = ['title', 'description', 'status', 'due_date'];
+  const allowed = ['title', 'description', 'status', 'start_date', 'due_date', 'target_paths'];
   const updates = [];
   const values = [];
   for (const key of allowed) {
     if (req.body[key] !== undefined) {
-      updates.push(`${key} = ?`);
-      values.push(req.body[key] === '' ? null : req.body[key]);
+      if (key === 'target_paths') {
+        updates.push(`${key} = ?`);
+        values.push(Array.isArray(req.body[key]) ? JSON.stringify(req.body[key]) : null);
+      } else {
+        updates.push(`${key} = ?`);
+        values.push(req.body[key] === '' ? null : req.body[key]);
+      }
     }
   }
   if (updates.length === 0) return res.status(400).json({ error: 'No valid fields to update' });
@@ -487,35 +563,174 @@ function updateChildDepths(parentId, parentDepth) {
   }
 }
 
+// --- Path autocomplete API ---
+
+app.get('/api/projects/:projectId/paths', (req, res) => {
+  const { projectId } = req.params;
+  const project = db.prepare('SELECT directory FROM projects WHERE id = ?').get(projectId);
+  if (!project) return res.status(404).json({ error: 'Project not found' });
+
+  const query = req.query.q || '';
+  const baseDir = project.directory;
+
+  try {
+    // Resolve the target directory to list
+    const targetDir = query ? path.join(baseDir, query) : baseDir;
+    const parentDir = fs.statSync(targetDir).isDirectory() ? targetDir : path.dirname(targetDir);
+    const prefix = query && !fs.statSync(targetDir).isDirectory() ? path.basename(query) : '';
+
+    const entries = fs.readdirSync(parentDir, { withFileTypes: true })
+      .filter((e) => !e.name.startsWith('.'))
+      .filter((e) => !prefix || e.name.toLowerCase().startsWith(prefix.toLowerCase()))
+      .slice(0, 50)
+      .map((e) => {
+        const relativePath = path.relative(baseDir, path.join(parentDir, e.name));
+        return {
+          name: e.name,
+          path: relativePath,
+          isDirectory: e.isDirectory(),
+        };
+      })
+      .sort((a, b) => {
+        // Directories first, then alphabetical
+        if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      });
+
+    res.json(entries);
+  } catch {
+    res.json([]);
+  }
+});
+
 app.delete('/api/tasks/:taskId', (req, res) => {
   const { taskId } = req.params;
   const task = db.prepare('SELECT project_id FROM tasks WHERE id = ?').get(taskId);
+
+  // Collect all descendant task IDs to clean up attachments
+  const taskIdsToClean = [taskId];
+  function collectChildIds(parentId) {
+    const children = db.prepare('SELECT id FROM tasks WHERE parent_id = ?').all(parentId);
+    for (const child of children) {
+      taskIdsToClean.push(String(child.id));
+      collectChildIds(child.id);
+    }
+  }
+  collectChildIds(taskId);
+
   const result = db.prepare('DELETE FROM tasks WHERE id = ?').run(taskId);
   if (result.changes === 0) return res.status(404).json({ error: 'Task not found' });
+
+  // Clean up attachment directories
+  for (const id of taskIdsToClean) {
+    const dir = path.join(TMP_IMAGES_DIR, id);
+    if (fs.existsSync(dir)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
   if (task) io.emit('tasks.changed', { projectId: task.project_id });
+  res.json({ ok: true });
+});
+
+// --- Attachment API ---
+
+app.post('/api/tasks/:taskId/attachments', upload.array('files', 20), (req, res) => {
+  const { taskId } = req.params;
+  const task = db.prepare('SELECT id FROM tasks WHERE id = ?').get(taskId);
+  if (!task) return res.status(404).json({ error: 'Task not found' });
+
+  const files = (req.files || []).map((f) => ({
+    name: f.filename,
+    originalName: Buffer.from(f.originalname, 'latin1').toString('utf8'),
+    size: f.size,
+    url: `/attachments/${taskId}/${encodeURIComponent(f.filename)}`,
+  }));
+  res.json(files);
+});
+
+app.get('/api/tasks/:taskId/attachments', (req, res) => {
+  const { taskId } = req.params;
+  const dir = path.join(TMP_IMAGES_DIR, taskId);
+  if (!fs.existsSync(dir)) return res.json([]);
+
+  try {
+    const files = fs.readdirSync(dir).map((name) => {
+      const stat = fs.statSync(path.join(dir, name));
+      return {
+        name,
+        originalName: name.replace(/^\d+_/, ''),
+        size: stat.size,
+        url: `/attachments/${taskId}/${encodeURIComponent(name)}`,
+      };
+    });
+    res.json(files);
+  } catch {
+    res.json([]);
+  }
+});
+
+app.delete('/api/tasks/:taskId/attachments/:filename', (req, res) => {
+  const { taskId, filename } = req.params;
+  const filePath = path.join(TMP_IMAGES_DIR, taskId, filename);
+  if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'File not found' });
+
+  fs.unlinkSync(filePath);
   res.json({ ok: true });
 });
 
 // --- Hooks endpoint ---
 
 app.post('/api/hook/status', (req, res) => {
-  const { sessionId, status } = req.body;
+  const { sessionId, status, event } = req.body;
 
   if (!sessionId || !sessions.has(sessionId)) {
     return res.status(404).json({ error: 'Session not found' });
   }
 
   const session = sessions.get(sessionId);
-  if (status && ['working', 'waiting', 'done'].includes(status)) {
-    // Ignore "waiting" if "done" was set very recently (Stop fires before Notification on task completion)
-    if (status === 'waiting' && session.status === 'done' && session.doneAt && Date.now() - session.doneAt < 1000) {
-      return res.json({ ok: true, sessionId, status: session.status });
-    }
-
-    session.status = status;
-    if (status === 'done') session.doneAt = Date.now();
-    io.emit('session.status', { sessionId, status });
+  if (!status || !['working', 'waiting', 'done'].includes(status)) {
+    return res.json({ ok: true, sessionId, status: session.status });
   }
+
+  const now = Date.now();
+
+  // 1. Never transition from waiting (red) to done (blue) directly — must go through working first
+  if (status === 'done' && session.status === 'waiting') {
+    if (session.doneTimer) clearTimeout(session.doneTimer);
+    return res.json({ ok: true, sessionId, status: session.status });
+  }
+
+  // 2. Debounce 'done' from Stop events (300ms) to prevent race with PermissionRequest
+  if (status === 'done' && event === 'Stop') {
+    if (session.doneTimer) clearTimeout(session.doneTimer);
+    session.doneTimer = setTimeout(() => {
+      if (session.status === 'waiting') return; // Re-check: don't override waiting
+      session.status = 'done';
+      session.doneAt = Date.now();
+      session.statusAt = Date.now();
+      io.emit('session.status', { sessionId, status: 'done' });
+    }, 300);
+    return res.json({ ok: true, sessionId, status: session.status });
+  }
+
+  // 3. Don't let 'working' override 'waiting' within 500ms (race condition guard)
+  if (status === 'working' && session.status === 'waiting' &&
+      session.statusAt && now - session.statusAt < 500) {
+    return res.json({ ok: true, sessionId, status: session.status });
+  }
+
+  // 4. Cancel pending Stop debounce when higher-priority status arrives
+  if (session.doneTimer) {
+    clearTimeout(session.doneTimer);
+    session.doneTimer = null;
+  }
+
+  // 5. Apply the status
+  session.status = status;
+  session.statusAt = now;
+  if (status === 'done') session.doneAt = now;
+  io.emit('session.status', { sessionId, status });
 
   res.json({ ok: true, sessionId, status: session.status });
 });

@@ -1,0 +1,1 @@
+ALTER TABLE tasks ADD COLUMN target_paths TEXT DEFAULT NULL;
