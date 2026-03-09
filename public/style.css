@@ -573,15 +573,90 @@ html, body {
   align-items: center;
 }
 
-#task-project-select {
+/* Multiselect dropdown */
+.multiselect {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+.multiselect-display {
   background: #1e1e1e;
   border: 1px solid #555;
   color: #ddd;
-  padding: 5px 8px;
+  padding: 5px 28px 5px 8px;
   border-radius: 4px;
   font-size: 13px;
-  outline: none;
-  flex: 1;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  position: relative;
+}
+
+.multiselect-display::after {
+  content: '';
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid #888;
+}
+
+.multiselect-display:hover,
+.multiselect.open .multiselect-display {
+  border-color: #4682E6;
+}
+
+.multiselect.open .multiselect-display::after {
+  border-top: none;
+  border-bottom: 5px solid #888;
+}
+
+.multiselect-dropdown {
+  display: none;
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  background: #1e1e1e;
+  border: 1px solid #555;
+  border-radius: 4px;
+  margin-top: 2px;
+  max-height: 200px;
+  overflow-y: auto;
+  z-index: 100;
+}
+
+.multiselect.open .multiselect-dropdown {
+  display: block;
+}
+
+.multiselect-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  cursor: pointer;
+  font-size: 12px;
+  color: #ccc;
+  user-select: none;
+}
+
+.multiselect-option:hover {
+  background: #2a2a2a;
+}
+
+.multiselect-option input {
+  accent-color: #4682E6;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.multiselect-option input:checked + span {
+  color: #ddd;
 }
 
 .btn-refresh {
@@ -615,8 +690,48 @@ html, body {
   to { transform: rotate(360deg); }
 }
 
-#task-project-select:focus {
+/* Task create project selector */
+.task-create-row {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.task-create-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.task-create-row button {
+  flex-shrink: 0;
+}
+
+.task-create-project {
+  background: #1e1e1e;
+  border: 1px solid #555;
+  color: #ddd;
+  padding: 4px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  outline: none;
+  max-width: 100px;
+  flex-shrink: 0;
+}
+
+.task-create-project:focus {
   border-color: #4682E6;
+}
+
+/* Task project group header */
+.task-project-header {
+  padding: 6px 8px;
+  font-size: 11px;
+  font-weight: bold;
+  color: #4682E6;
+  background: #1a1a2e;
+  border-bottom: 1px solid #333;
+  margin-top: 4px;
+  user-select: none;
 }
 
 .task-filters {

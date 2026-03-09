@@ -63,7 +63,10 @@
         <div id="sidebar-tasks" style="display:none;">
           <div class="task-toolbar">
             <div class="task-toolbar-row">
-              <select id="task-project-select"></select>
+              <div id="task-project-multiselect" class="multiselect">
+                <div class="multiselect-display">すべてのプロジェクト</div>
+                <div class="multiselect-dropdown"></div>
+              </div>
               <button id="btn-refresh-tasks" class="btn-refresh" title="タスク一覧を更新">↻</button>
             </div>
             <div class="task-filters">
@@ -75,8 +78,11 @@
           </div>
           <div id="task-list" class="sidebar-list"></div>
           <form id="form-new-task" class="sidebar-form">
-            <input type="text" id="input-task-title" placeholder="タスク名を入力..." required>
-            <button type="submit">追加</button>
+            <div class="task-create-row">
+              <select id="task-create-project-select" class="task-create-project"></select>
+              <input type="text" id="input-task-title" placeholder="タスク名を入力..." required>
+              <button type="submit">追加</button>
+            </div>
           </form>
         </div>
       </div>

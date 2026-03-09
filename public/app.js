@@ -481,8 +481,8 @@ socket.on('session.exit', ({ sessionId }) => {
 });
 
 socket.on('tasks.changed', ({ projectId }) => {
-  if (projectId === selectedProjectId) {
-    loadTasks(selectedProjectId);
+  if (selectedProjectIds.has(projectId)) {
+    loadSelectedTasks();
   }
   // Refresh Gantt/Kanban if open and showing this project
   if (!ganttModal.classList.contains('hidden')) {
@@ -579,6 +579,7 @@ modal.querySelector('.modal-close').addEventListener('click', closeProjectSelect
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     closeAllMenus();
+    multiselectEl.classList.remove('open');
     if (!modal.classList.contains('hidden')) closeProjectSelectModal();
     if (!editModal.classList.contains('hidden')) closeProjectEditModal();
     if (!ganttModal.classList.contains('hidden')) closeGanttModal();
@@ -589,14 +590,17 @@ document.addEventListener('keydown', (e) => {
 // --- Task management ---
 
 let sidebarMode = 'projects';
-let selectedProjectId = null;
+const selectedProjectIds = new Set();
 let tasks = [];
 const activeFilters = new Set(['todo', 'in_progress', 'review']);
 const collapsedTasks = new Set();
 
 const sidebarProjectsEl = document.getElementById('sidebar-projects');
 const sidebarTasksEl = document.getElementById('sidebar-tasks');
-const taskProjectSelect = document.getElementById('task-project-select');
+const multiselectEl = document.getElementById('task-project-multiselect');
+const multiselectDisplay = multiselectEl.querySelector('.multiselect-display');
+const multiselectDropdown = multiselectEl.querySelector('.multiselect-dropdown');
+const taskCreateProjectSelect = document.getElementById('task-create-project-select');
 const btnRefreshTasks = document.getElementById('btn-refresh-tasks');
 const taskListEl = document.getElementById('task-list');
 const formNewTask = document.getElementById('form-new-task');
@@ -611,36 +615,102 @@ function switchSidebarMode(mode) {
   sidebarTasksEl.style.display = mode === 'tasks' ? '' : 'none';
 
   if (mode === 'tasks') {
-    updateTaskProjectSelect();
-    if (selectedProjectId) loadTasks(selectedProjectId);
+    updateProjectMultiselect();
+    loadSelectedTasks();
   }
 }
 
-function updateTaskProjectSelect() {
-  taskProjectSelect.innerHTML = '';
+function updateProjectMultiselect() {
+  multiselectDropdown.innerHTML = '';
   if (projects.length === 0) {
-    taskProjectSelect.innerHTML = '<option value="">プロジェクト未登録</option>';
+    multiselectDisplay.textContent = 'プロジェクト未登録';
     return;
   }
+  // 初回: 全プロジェクトを選択
+  if (selectedProjectIds.size === 0) {
+    for (const p of projects) selectedProjectIds.add(p.id);
+  }
   for (const p of projects) {
-    const opt = document.createElement('option');
-    opt.value = p.id;
-    opt.textContent = p.code ? `[${p.code}] ${p.name}` : p.name;
-    if (p.id === selectedProjectId) opt.selected = true;
-    taskProjectSelect.appendChild(opt);
+    const label = document.createElement('label');
+    label.className = 'multiselect-option';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.dataset.projectId = p.id;
+    cb.checked = selectedProjectIds.has(p.id);
+    cb.addEventListener('change', () => {
+      if (cb.checked) selectedProjectIds.add(p.id);
+      else selectedProjectIds.delete(p.id);
+      updateMultiselectDisplayText();
+      updateCreateProjectSelect();
+      loadSelectedTasks();
+    });
+    const span = document.createElement('span');
+    span.textContent = p.code ? `[${p.code}] ${p.name}` : p.name;
+    label.appendChild(cb);
+    label.appendChild(span);
+    multiselectDropdown.appendChild(label);
   }
-  if (!selectedProjectId && projects.length > 0) {
-    selectedProjectId = projects[0].id;
-  }
-  taskProjectSelect.value = selectedProjectId || '';
+  updateMultiselectDisplayText();
+  updateCreateProjectSelect();
 }
 
-async function loadTasks(projectId) {
-  if (!projectId) { tasks = []; renderTaskList(); return; }
-  const res = await fetch(`/api/projects/${projectId}/tasks`);
-  if (!res.ok) { tasks = []; renderTaskList(); return; }
-  tasks = await res.json();
-  // 初期表示時: ルートレベル（プロジェクト）のトグルをすべて閉じる
+function updateMultiselectDisplayText() {
+  if (selectedProjectIds.size === 0) {
+    multiselectDisplay.textContent = 'プロジェクト未選択';
+  } else if (selectedProjectIds.size === projects.length) {
+    multiselectDisplay.textContent = 'すべてのプロジェクト';
+  } else if (selectedProjectIds.size === 1) {
+    const id = [...selectedProjectIds][0];
+    const p = projects.find(pr => pr.id === id);
+    multiselectDisplay.textContent = p ? (p.code ? `[${p.code}] ${p.name}` : p.name) : '1件選択中';
+  } else {
+    multiselectDisplay.textContent = `${selectedProjectIds.size}件選択中`;
+  }
+}
+
+function updateCreateProjectSelect() {
+  taskCreateProjectSelect.innerHTML = '';
+  const checked = projects.filter(p => selectedProjectIds.has(p.id));
+  for (const p of checked) {
+    const opt = document.createElement('option');
+    opt.value = p.id;
+    opt.textContent = p.code || p.name;
+    taskCreateProjectSelect.appendChild(opt);
+  }
+}
+
+// Toggle multiselect open/close
+multiselectDisplay.addEventListener('click', (e) => {
+  e.stopPropagation();
+  multiselectEl.classList.toggle('open');
+});
+
+multiselectDropdown.addEventListener('click', (e) => {
+  e.stopPropagation();
+});
+
+document.addEventListener('click', () => {
+  multiselectEl.classList.remove('open');
+});
+
+async function loadSelectedTasks() {
+  if (selectedProjectIds.size === 0) {
+    tasks = [];
+    renderTaskList();
+    return;
+  }
+  if (selectedProjectIds.size === 1) {
+    const projectId = [...selectedProjectIds][0];
+    const res = await fetch(`/api/projects/${projectId}/tasks`);
+    if (!res.ok) { tasks = []; renderTaskList(); return; }
+    tasks = await res.json();
+  } else {
+    const res = await fetch('/api/tasks/all');
+    if (!res.ok) { tasks = []; renderTaskList(); return; }
+    const allTasks = await res.json();
+    tasks = allTasks.filter(t => selectedProjectIds.has(t.project_id));
+  }
+  // 初期表示時: ルートレベルのトグルをすべて閉じる
   collapsedTasks.clear();
   const tree = buildTaskTree(tasks);
   for (const node of tree) {
@@ -649,6 +719,10 @@ async function loadTasks(projectId) {
     }
   }
   renderTaskList();
+}
+
+function getCreateProjectId() {
+  return Number(taskCreateProjectSelect.value) || ([...selectedProjectIds][0]) || null;
 }
 
 function buildTaskTree(flatTasks) {
@@ -683,16 +757,43 @@ function filterTasks(tree) {
 
 function renderTaskList() {
   taskListEl.innerHTML = '';
-  const tree = buildTaskTree(tasks);
-  const filtered = filterTasks(tree);
 
-  if (filtered.length === 0) {
-    taskListEl.innerHTML = '<div class="task-empty">タスクがありません</div>';
-    return;
-  }
-
-  for (const node of filtered) {
-    taskListEl.appendChild(renderTaskNode(node));
+  if (selectedProjectIds.size > 1) {
+    // 複数プロジェクト: プロジェクトごとにグルーピング
+    const grouped = new Map();
+    for (const t of tasks) {
+      if (!grouped.has(t.project_id)) grouped.set(t.project_id, []);
+      grouped.get(t.project_id).push(t);
+    }
+    let hasAny = false;
+    for (const [projId, projTasks] of grouped) {
+      const tree = buildTaskTree(projTasks);
+      const filtered = filterTasks(tree);
+      if (filtered.length === 0) continue;
+      hasAny = true;
+      const p = projects.find(pr => pr.id === projId) || projTasks[0];
+      const header = document.createElement('div');
+      header.className = 'task-project-header';
+      header.textContent = p.code ? `[${p.code}] ${p.name}` : (p.project_name || p.name || `Project ${projId}`);
+      taskListEl.appendChild(header);
+      for (const node of filtered) {
+        taskListEl.appendChild(renderTaskNode(node));
+      }
+    }
+    if (!hasAny) {
+      taskListEl.innerHTML = '<div class="task-empty">タスクがありません</div>';
+    }
+  } else {
+    // 単一プロジェクト: 現行通り
+    const tree = buildTaskTree(tasks);
+    const filtered = filterTasks(tree);
+    if (filtered.length === 0) {
+      taskListEl.innerHTML = '<div class="task-empty">タスクがありません</div>';
+      return;
+    }
+    for (const node of filtered) {
+      taskListEl.appendChild(renderTaskNode(node));
+    }
   }
 }
 
@@ -888,7 +989,7 @@ function toggleTaskDetail(node, el) {
   `;
 
   // Initialize target paths UI
-  initTargetPathsUI(panel, currentPaths, selectedProjectId);
+  initTargetPathsUI(panel, currentPaths, node.project_id);
 
   // Initialize attachment UI
   initAttachmentUI(panel, node.id);
@@ -1228,7 +1329,7 @@ taskListEl.addEventListener('drop', async (e) => {
     alert(err.error || '移動に失敗しました');
   }
 
-  await loadTasks(selectedProjectId);
+  await loadSelectedTasks();
 });
 
 function startAddChild(parentId, parentEl) {
@@ -1251,7 +1352,9 @@ function startAddChild(parentId, parentEl) {
     const title = input.value.trim();
     form.remove();
     if (title) {
-      await createTask(selectedProjectId, title, parentId);
+      const parentTask = tasks.find(t => t.id === parentId);
+      const projId = parentTask ? parentTask.project_id : getCreateProjectId();
+      await createTask(projId, title, parentId);
     }
   };
 
@@ -1275,7 +1378,7 @@ async function createTask(projectId, title, parentId) {
     alert(err.error || 'タスク作成に失敗しました');
     return;
   }
-  await loadTasks(projectId);
+  await loadSelectedTasks();
 }
 
 async function updateTask(taskId, fields) {
@@ -1290,8 +1393,17 @@ async function updateTask(taskId, fields) {
     return;
   }
   // 一覧を再取得してローカルデータを同期
-  const listRes = await fetch(`/api/projects/${selectedProjectId}/tasks`);
-  if (listRes.ok) tasks = await listRes.json();
+  if (selectedProjectIds.size === 1) {
+    const projId = [...selectedProjectIds][0];
+    const listRes = await fetch(`/api/projects/${projId}/tasks`);
+    if (listRes.ok) tasks = await listRes.json();
+  } else {
+    const listRes = await fetch('/api/tasks/all');
+    if (listRes.ok) {
+      const allTasks = await listRes.json();
+      tasks = allTasks.filter(t => selectedProjectIds.has(t.project_id));
+    }
+  }
   // DOM再構築せず該当タスクだけ部分更新（トグル状態を保持）
   patchTaskDOM(taskId);
 }
@@ -1361,7 +1473,7 @@ function patchTaskDOM(taskId) {
 async function deleteTask(taskId, title) {
   if (!confirm(`「${title}」を削除しますか？（子タスクも削除されます）`)) return;
   await fetch(`/api/tasks/${taskId}`, { method: 'DELETE' });
-  await loadTasks(selectedProjectId);
+  await loadSelectedTasks();
 }
 
 // --- Task assignment ---
@@ -1388,8 +1500,7 @@ function assignTaskToSession(task) {
 }
 
 async function openNewSessionAssignModal(task) {
-  const project = projects.find(p => p.id === selectedProjectId)
-    || projects.find(p => p.id === task.project_id);
+  const project = projects.find(p => p.id === task.project_id);
   if (!project) {
     alert('プロジェクトが見つかりません。');
     return;
@@ -1418,15 +1529,10 @@ document.querySelectorAll('.sidebar-tab').forEach((tab) => {
   tab.addEventListener('click', () => switchSidebarMode(tab.dataset.mode));
 });
 
-taskProjectSelect.addEventListener('change', (e) => {
-  selectedProjectId = Number(e.target.value) || null;
-  if (selectedProjectId) loadTasks(selectedProjectId);
-});
-
 btnRefreshTasks.addEventListener('click', () => {
-  if (!selectedProjectId) return;
+  if (selectedProjectIds.size === 0) return;
   btnRefreshTasks.classList.add('spinning');
-  loadTasks(selectedProjectId).then(() => {
+  loadSelectedTasks().then(() => {
     setTimeout(() => btnRefreshTasks.classList.remove('spinning'), 300);
   });
 });
@@ -1443,8 +1549,9 @@ formNewTask.addEventListener('submit', async (e) => {
   e.preventDefault();
   const input = document.getElementById('input-task-title');
   const title = input.value.trim();
-  if (!title || !selectedProjectId) return;
-  await createTask(selectedProjectId, title, null);
+  const projectId = getCreateProjectId();
+  if (!title || !projectId) return;
+  await createTask(projectId, title, null);
   input.value = '';
 });
 
@@ -1472,9 +1579,10 @@ document.getElementById('btn-kanban').addEventListener('click', () => {
 
 // --- Shared modal helper ---
 
-function populateModalProjectSelect(selectId, addAllOption) {
+function populateModalProjectSelect(selectId, addAllOption, restoreValue) {
   const select = document.getElementById(selectId);
   select.innerHTML = '';
+  const firstSelectedId = selectedProjectIds.size > 0 ? [...selectedProjectIds][0] : null;
   if (addAllOption) {
     const allOpt = document.createElement('option');
     allOpt.value = 'all';
@@ -1485,10 +1593,13 @@ function populateModalProjectSelect(selectId, addAllOption) {
     const opt = document.createElement('option');
     opt.value = p.id;
     opt.textContent = p.code ? `[${p.code}] ${p.name}` : p.name;
-    if (p.id === selectedProjectId) opt.selected = true;
     select.appendChild(opt);
   }
-  if (selectedProjectId) select.value = selectedProjectId;
+  if (restoreValue !== undefined && restoreValue !== null) {
+    select.value = restoreValue;
+  } else if (firstSelectedId) {
+    select.value = firstSelectedId;
+  }
 }
 
 // --- Gantt Chart ---
@@ -1496,9 +1607,10 @@ function populateModalProjectSelect(selectId, addAllOption) {
 let ganttCurrentTasks = []; // current gantt tasks data
 const ganttCollapsedTasks = new Set();
 let ganttIsAllProjects = false;
+let ganttSelectedProjectValue = null;
 
 function openGanttModal() {
-  populateModalProjectSelect('gantt-project-select', true);
+  populateModalProjectSelect('gantt-project-select', true, ganttSelectedProjectValue);
   ganttModal.classList.remove('hidden');
   loadGanttData();
 }
@@ -1510,7 +1622,10 @@ function closeGanttModal() {
 
 ganttModal.querySelector('.modal-backdrop').addEventListener('click', closeGanttModal);
 ganttModal.querySelector('.modal-close').addEventListener('click', closeGanttModal);
-document.getElementById('gantt-project-select').addEventListener('change', loadGanttData);
+document.getElementById('gantt-project-select').addEventListener('change', () => {
+  ganttSelectedProjectValue = document.getElementById('gantt-project-select').value;
+  loadGanttData();
+});
 document.getElementById('gantt-show-no-date').addEventListener('change', () => {
   if (ganttCurrentTasks.length > 0) renderGanttChart(ganttCurrentTasks);
 });
@@ -2155,8 +2270,10 @@ async function promptAndAddChildTask(parentId, projectId) {
 
 // --- Kanban Board ---
 
+let kanbanSelectedProjectValue = null;
+
 function openKanbanModal() {
-  populateModalProjectSelect('kanban-project-select');
+  populateModalProjectSelect('kanban-project-select', false, kanbanSelectedProjectValue);
   kanbanModal.classList.remove('hidden');
   loadKanbanData();
 }
@@ -2167,7 +2284,10 @@ function closeKanbanModal() {
 
 kanbanModal.querySelector('.modal-backdrop').addEventListener('click', closeKanbanModal);
 kanbanModal.querySelector('.modal-close').addEventListener('click', closeKanbanModal);
-document.getElementById('kanban-project-select').addEventListener('change', loadKanbanData);
+document.getElementById('kanban-project-select').addEventListener('change', () => {
+  kanbanSelectedProjectValue = document.getElementById('kanban-project-select').value;
+  loadKanbanData();
+});
 
 let kanbanTasks = [];
 
