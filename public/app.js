@@ -5,30 +5,62 @@ const terminalSessions = new Map(); // id -> { terminal, fitAddon, wrapper }
 let activeSessionId = null;
 let projects = [];
 
-// --- Tab name persistence (sessionStorage) ---
+// --- Tab state persistence (localStorage) ---
 
-function saveTabNames() {
-  const names = {};
-  terminalSessions.forEach((s, id) => {
-    const label = s.tab.querySelector('.tab-label');
-    if (label) names[id] = label.textContent;
-  });
-  sessionStorage.setItem('tabNames', JSON.stringify(names));
+const GROUP_COLORS = ['#4682E6','#DC3232','#2ea043','#FFC800','#FF69B4','#9B59B6','#00BCD4','#FF8C00'];
+
+function loadTabState() {
+  try {
+    return JSON.parse(localStorage.getItem('tabState') || '{"tabs":{},"groups":{}}');
+  } catch { return { tabs: {}, groups: {} }; }
 }
 
-function getStoredTabName(sessionId) {
-  try {
-    const names = JSON.parse(sessionStorage.getItem('tabNames') || '{}');
-    return names[sessionId] || null;
-  } catch { return null; }
+function saveTabState(state) {
+  localStorage.setItem('tabState', JSON.stringify(state));
 }
 
-function removeStoredTabName(sessionId) {
-  try {
-    const names = JSON.parse(sessionStorage.getItem('tabNames') || '{}');
-    delete names[sessionId];
-    sessionStorage.setItem('tabNames', JSON.stringify(names));
-  } catch { /* ignore */ }
+function getTabRecord(sessionId) {
+  return loadTabState().tabs[sessionId] || null;
+}
+
+function saveTabRecord(sessionId, fields) {
+  const state = loadTabState();
+  state.tabs[sessionId] = { ...(state.tabs[sessionId] || {}), ...fields };
+  saveTabState(state);
+}
+
+function removeTabRecord(sessionId) {
+  const state = loadTabState();
+  delete state.tabs[sessionId];
+  saveTabState(state);
+}
+
+// --- Tab group operations ---
+
+function createGroup(name, color) {
+  const state = loadTabState();
+  const id = 'group-' + Date.now();
+  const sortOrder = Object.keys(state.groups).length;
+  state.groups[id] = { name, color: color || GROUP_COLORS[sortOrder % GROUP_COLORS.length], sortOrder, collapsed: false };
+  saveTabState(state);
+  return id;
+}
+
+function updateGroup(groupId, fields) {
+  const state = loadTabState();
+  if (state.groups[groupId]) {
+    Object.assign(state.groups[groupId], fields);
+    saveTabState(state);
+  }
+}
+
+function deleteGroup(groupId) {
+  const state = loadTabState();
+  delete state.groups[groupId];
+  for (const tab of Object.values(state.tabs)) {
+    if (tab.groupId === groupId) tab.groupId = null;
+  }
+  saveTabState(state);
 }
 
 const tabsEl = document.getElementById('tabs');
@@ -251,7 +283,7 @@ function addSessionUI(session) {
   tab.dataset.id = session.id;
   tab.innerHTML = `
     <span class="status-dot ${session.status || ''}"></span>
-    <span class="tab-label">${escapeHtml(getStoredTabName(session.id) || session.name)}</span>
+    <span class="tab-label">${escapeHtml((getTabRecord(session.id) || {}).name || session.name)}</span>
     <button class="close-btn" title="セッション終了">&times;</button>
   `;
   tab.addEventListener('click', (e) => {
@@ -265,10 +297,20 @@ function addSessionUI(session) {
     }
   });
   tab.querySelector('.close-btn').addEventListener('click', () => deleteSession(session.id));
-  tabsEl.appendChild(tab);
+  tab.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    showTabContextMenu(e, session.id, null);
+  });
 
-  // Store references
+  // Store references (do NOT append to tabsEl directly — renderTabBar handles placement)
   terminalSessions.set(session.id, { terminal, fitAddon, wrapper, tab, projectId: session.projectId });
+
+  // Save initial tab record if not already stored
+  if (!getTabRecord(session.id)) {
+    saveTabRecord(session.id, { name: session.name, groupId: null, sortOrder: terminalSessions.size - 1 });
+  }
+
+  renderTabBar();
 
   // Subscribe to this session's output
   socket.emit('session.join', session.id);
@@ -322,9 +364,8 @@ function cleanupSession(id) {
   socket.emit('session.leave', id);
   s.terminal.dispose();
   s.wrapper.remove();
-  s.tab.remove();
   terminalSessions.delete(id);
-  removeStoredTabName(id);
+  removeTabRecord(id);
 
   // Switch to another session if needed
   if (activeSessionId === id) {
@@ -335,6 +376,7 @@ function cleanupSession(id) {
       activeSessionId = null;
     }
   }
+  renderTabBar();
 }
 
 // --- Tab rename ---
@@ -360,7 +402,7 @@ function renameTab(id) {
     span.className = 'tab-label';
     span.textContent = newName;
     input.replaceWith(span);
-    saveTabNames();
+    saveTabRecord(id, { name: newName });
   };
 
   input.addEventListener('blur', commit);
@@ -368,6 +410,125 @@ function renameTab(id) {
     if (e.key === 'Enter') input.blur();
     if (e.key === 'Escape') { input.value = current; input.blur(); }
   });
+}
+
+// --- Tab bar rendering (group-aware) ---
+
+function getContrastColor(hex) {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.5 ? '#1e1e1e' : '#ffffff';
+}
+
+function createGroupHeader(groupId, group, tabCount) {
+  const header = document.createElement('div');
+  header.className = `tab-group-header${group.collapsed ? ' collapsed' : ''}`;
+  header.style.background = group.color;
+  header.style.color = getContrastColor(group.color);
+  header.dataset.groupId = groupId;
+  header.draggable = true;
+
+  header.innerHTML = `
+    <span class="group-collapse-icon">▼</span>
+    <span class="group-label">${escapeHtml(group.name || 'グループ')}</span>
+    <span class="group-count">${tabCount}</span>
+  `;
+
+  // Click to toggle collapsed
+  header.addEventListener('click', (e) => {
+    if (e.target.closest('.group-label') && e.detail === 2) return; // skip dblclick
+    updateGroup(groupId, { collapsed: !group.collapsed });
+    renderTabBar();
+  });
+
+  // Double click to rename
+  header.addEventListener('dblclick', (e) => {
+    e.stopPropagation();
+    const label = header.querySelector('.group-label');
+    const current = label.textContent;
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'tab-group-rename-input';
+    input.value = current;
+    label.replaceWith(input);
+    input.focus();
+    input.select();
+
+    const commit = () => {
+      const newName = input.value.trim() || current;
+      updateGroup(groupId, { name: newName });
+      renderTabBar();
+    };
+    input.addEventListener('blur', commit);
+    input.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') input.blur();
+      if (ev.key === 'Escape') { input.value = current; input.blur(); }
+    });
+  });
+
+  // Right click for context menu
+  header.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    showTabContextMenu(e, null, groupId);
+  });
+
+  return header;
+}
+
+function renderTabBar() {
+  const state = loadTabState();
+
+  // Collect all tab elements from terminalSessions
+  const allSessions = [...terminalSessions.entries()].map(([id, s]) => {
+    const record = state.tabs[id] || {};
+    return { id, session: s, groupId: record.groupId || null, sortOrder: record.sortOrder || 0 };
+  });
+
+  // Sort groups by sortOrder
+  const sortedGroups = Object.entries(state.groups)
+    .sort(([, a], [, b]) => (a.sortOrder || 0) - (b.sortOrder || 0));
+
+  // Clear tabs container
+  tabsEl.innerHTML = '';
+
+  // Render grouped tabs
+  for (const [groupId, group] of sortedGroups) {
+    const groupTabs = allSessions
+      .filter((s) => s.groupId === groupId)
+      .sort((a, b) => a.sortOrder - b.sortOrder);
+
+    if (groupTabs.length === 0) continue;
+
+    const container = document.createElement('div');
+    container.className = `tab-group${group.collapsed ? ' collapsed' : ''}`;
+    container.dataset.groupId = groupId;
+    container.style.setProperty('--group-color', group.color);
+
+    container.appendChild(createGroupHeader(groupId, group, groupTabs.length));
+
+    for (const { session } of groupTabs) {
+      container.appendChild(session.tab);
+    }
+
+    tabsEl.appendChild(container);
+  }
+
+  // Render ungrouped tabs
+  const ungrouped = allSessions
+    .filter((s) => !s.groupId)
+    .sort((a, b) => a.sortOrder - b.sortOrder);
+
+  for (const { session } of ungrouped) {
+    tabsEl.appendChild(session.tab);
+  }
+
+  // Re-apply active state
+  if (activeSessionId) {
+    for (const [sid, s] of terminalSessions) {
+      s.tab.classList.toggle('active', sid === activeSessionId);
+    }
+  }
 }
 
 // --- Tab drag & drop ---
@@ -385,30 +546,205 @@ tabsEl.addEventListener('dragstart', (e) => {
 tabsEl.addEventListener('dragend', () => {
   if (draggedTab) draggedTab.classList.remove('dragging');
   draggedTab = null;
-  document.querySelectorAll('.tab.drag-over').forEach((t) => t.classList.remove('drag-over'));
+  document.querySelectorAll('.drag-over').forEach((t) => t.classList.remove('drag-over'));
 });
 
 tabsEl.addEventListener('dragover', (e) => {
   e.preventDefault();
   e.dataTransfer.dropEffect = 'move';
+  if (!draggedTab) return;
+
+  document.querySelectorAll('.drag-over').forEach((t) => t.classList.remove('drag-over'));
+
+  // Check if hovering over a group header (drop-to-add-to-group)
+  const groupHeader = e.target.closest('.tab-group-header');
+  if (groupHeader) {
+    groupHeader.classList.add('drag-over');
+    return;
+  }
+
   const target = e.target.closest('.tab');
   if (!target || target === draggedTab) return;
 
-  document.querySelectorAll('.tab.drag-over').forEach((t) => t.classList.remove('drag-over'));
   const rect = target.getBoundingClientRect();
   const midX = rect.left + rect.width / 2;
+  const parent = target.parentNode;
   if (e.clientX < midX) {
-    target.classList.add('drag-over');
-    tabsEl.insertBefore(draggedTab, target);
+    parent.insertBefore(draggedTab, target);
   } else {
-    target.classList.add('drag-over');
-    tabsEl.insertBefore(draggedTab, target.nextSibling);
+    parent.insertBefore(draggedTab, target.nextSibling);
   }
 });
 
 tabsEl.addEventListener('drop', (e) => {
   e.preventDefault();
-  document.querySelectorAll('.tab.drag-over').forEach((t) => t.classList.remove('drag-over'));
+  document.querySelectorAll('.drag-over').forEach((t) => t.classList.remove('drag-over'));
+  if (!draggedTab) return;
+
+  const sessionId = draggedTab.dataset.id;
+
+  // Dropped on a group header → add tab to that group
+  const groupHeader = e.target.closest('.tab-group-header');
+  if (groupHeader) {
+    const groupId = groupHeader.dataset.groupId;
+    saveTabRecord(sessionId, { groupId });
+    renderTabBar();
+    return;
+  }
+
+  // Dropped outside any group → persist order from DOM
+  persistTabOrder();
+});
+
+function persistTabOrder() {
+  const state = loadTabState();
+  let order = 0;
+
+  for (const child of tabsEl.children) {
+    if (child.classList.contains('tab-group')) {
+      const groupId = child.dataset.groupId;
+      for (const tab of child.querySelectorAll('.tab')) {
+        const sid = tab.dataset.id;
+        if (state.tabs[sid]) {
+          state.tabs[sid].sortOrder = order++;
+          state.tabs[sid].groupId = groupId;
+        }
+      }
+    } else if (child.classList.contains('tab')) {
+      const sid = child.dataset.id;
+      if (state.tabs[sid]) {
+        state.tabs[sid].sortOrder = order++;
+        state.tabs[sid].groupId = null;
+      }
+    }
+  }
+
+  saveTabState(state);
+}
+
+// --- Tab context menu ---
+
+let contextMenuTargetSessionId = null;
+let contextMenuTargetGroupId = null;
+
+function showTabContextMenu(e, sessionId, groupId) {
+  const menu = document.getElementById('tab-context-menu');
+  if (!menu) return;
+
+  contextMenuTargetSessionId = sessionId;
+  contextMenuTargetGroupId = groupId;
+
+  // Position
+  menu.style.left = `${e.clientX}px`;
+  menu.style.top = `${e.clientY}px`;
+  menu.classList.remove('hidden');
+
+  // Show/hide items based on context
+  const isTab = !!sessionId;
+  const isGroupHeader = !!groupId && !sessionId;
+  const record = sessionId ? getTabRecord(sessionId) : null;
+  const isGrouped = record?.groupId != null;
+
+  menu.querySelector('[data-action="new-group"]').style.display = isTab ? '' : 'none';
+  menu.querySelector('[data-action="ungroup"]').style.display = (isTab && isGrouped) ? '' : 'none';
+  menu.querySelector('[data-action="change-color"]').style.display = (isGroupHeader || (isTab && isGrouped)) ? '' : 'none';
+  menu.querySelector('[data-action="delete-group"]').style.display = (isGroupHeader || (isTab && isGrouped)) ? '' : 'none';
+
+  // Populate existing groups
+  const groupsContainer = document.getElementById('context-menu-groups');
+  groupsContainer.innerHTML = '';
+  const state = loadTabState();
+  for (const [gid, group] of Object.entries(state.groups)) {
+    // Don't show the group the tab is already in
+    if (isTab && record?.groupId === gid) continue;
+    const btn = document.createElement('button');
+    btn.className = 'context-menu-item';
+    btn.innerHTML = `<span class="context-menu-color-dot" style="background:${group.color}"></span>${escapeHtml(group.name || 'グループ')}`;
+    btn.addEventListener('click', () => {
+      saveTabRecord(sessionId, { groupId: gid });
+      renderTabBar();
+      hideContextMenu();
+    });
+    groupsContainer.appendChild(btn);
+  }
+  groupsContainer.style.display = (isTab && Object.keys(state.groups).length > 0) ? '' : 'none';
+
+  // Color picker
+  const colorPicker = document.getElementById('context-menu-color-picker');
+  colorPicker.innerHTML = '';
+  colorPicker.classList.add('hidden');
+}
+
+function hideContextMenu() {
+  const menu = document.getElementById('tab-context-menu');
+  if (menu) menu.classList.add('hidden');
+  const colorPicker = document.getElementById('context-menu-color-picker');
+  if (colorPicker) colorPicker.classList.add('hidden');
+}
+
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('#tab-context-menu')) hideContextMenu();
+});
+
+document.addEventListener('contextmenu', (e) => {
+  if (!e.target.closest('#tabs') && !e.target.closest('.tab-group-header')) hideContextMenu();
+});
+
+// Context menu action handlers
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest('.context-menu-item[data-action]');
+  if (!btn) return;
+
+  const action = btn.dataset.action;
+
+  switch (action) {
+    case 'new-group': {
+      if (!contextMenuTargetSessionId) break;
+      const name = prompt('グループ名:');
+      if (name === null) break;
+      const groupId = createGroup(name || '');
+      saveTabRecord(contextMenuTargetSessionId, { groupId });
+      renderTabBar();
+      break;
+    }
+    case 'ungroup': {
+      if (!contextMenuTargetSessionId) break;
+      saveTabRecord(contextMenuTargetSessionId, { groupId: null });
+      renderTabBar();
+      break;
+    }
+    case 'change-color': {
+      const colorPicker = document.getElementById('context-menu-color-picker');
+      colorPicker.classList.toggle('hidden');
+      if (!colorPicker.classList.contains('hidden')) {
+        colorPicker.innerHTML = '';
+        const targetGroupId = contextMenuTargetGroupId || (contextMenuTargetSessionId && getTabRecord(contextMenuTargetSessionId)?.groupId);
+        if (!targetGroupId) break;
+        for (const color of GROUP_COLORS) {
+          const dot = document.createElement('span');
+          dot.className = 'context-menu-color-option';
+          dot.style.background = color;
+          dot.addEventListener('click', (ev) => {
+            ev.stopPropagation();
+            updateGroup(targetGroupId, { color });
+            renderTabBar();
+            hideContextMenu();
+          });
+          colorPicker.appendChild(dot);
+        }
+      }
+      return; // Don't hide menu
+    }
+    case 'delete-group': {
+      const targetGroupId = contextMenuTargetGroupId || (contextMenuTargetSessionId && getTabRecord(contextMenuTargetSessionId)?.groupId);
+      if (!targetGroupId) break;
+      deleteGroup(targetGroupId);
+      renderTabBar();
+      break;
+    }
+  }
+
+  hideContextMenu();
 });
 
 // --- Utility ---
@@ -1768,6 +2104,9 @@ function renderGanttChart(ganttTasks) {
       const t = row.task;
       const item = document.createElement('div');
       item.className = `gantt-task-list-item ${t.status}`;
+      item.draggable = true;
+      item.dataset.taskId = t.id;
+      item.dataset.parentId = t.parent_id || '';
       let indent = '';
       for (let i = 0; i < t.depth; i++) {
         indent += '<span class="gantt-task-indent"></span>';
@@ -1802,6 +2141,89 @@ function renderGanttChart(ganttTasks) {
       taskListBody.appendChild(item);
     }
   }
+
+  // Gantt drag & drop for reordering
+  let ganttDraggedTaskId = null;
+
+  taskListBody.addEventListener('dragstart', (e) => {
+    const item = e.target.closest('.gantt-task-list-item');
+    if (!item) return;
+    ganttDraggedTaskId = Number(item.dataset.taskId);
+    item.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+  });
+
+  taskListBody.addEventListener('dragend', () => {
+    taskListBody.querySelectorAll('.dragging').forEach(el => el.classList.remove('dragging'));
+    taskListBody.querySelectorAll('.gantt-drop-above, .gantt-drop-below').forEach(el => {
+      el.classList.remove('gantt-drop-above', 'gantt-drop-below');
+    });
+    ganttDraggedTaskId = null;
+  });
+
+  taskListBody.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    const item = e.target.closest('.gantt-task-list-item');
+    if (!item) return;
+    const targetId = Number(item.dataset.taskId);
+    if (targetId === ganttDraggedTaskId) return;
+
+    const rect = item.getBoundingClientRect();
+    const zone = (e.clientY - rect.top) < rect.height / 2 ? 'above' : 'below';
+
+    e.dataTransfer.dropEffect = 'move';
+    taskListBody.querySelectorAll('.gantt-drop-above, .gantt-drop-below').forEach(el => {
+      el.classList.remove('gantt-drop-above', 'gantt-drop-below');
+    });
+    item.classList.add(`gantt-drop-${zone}`);
+  });
+
+  taskListBody.addEventListener('dragleave', (e) => {
+    const item = e.target.closest('.gantt-task-list-item');
+    if (item) item.classList.remove('gantt-drop-above', 'gantt-drop-below');
+  });
+
+  taskListBody.addEventListener('drop', async (e) => {
+    e.preventDefault();
+    const item = e.target.closest('.gantt-task-list-item');
+    if (!item || ganttDraggedTaskId === null) return;
+
+    const targetId = Number(item.dataset.taskId);
+    if (targetId === ganttDraggedTaskId) return;
+
+    const rect = item.getBoundingClientRect();
+    const zone = (e.clientY - rect.top) < rect.height / 2 ? 'above' : 'below';
+
+    const targetTask = ganttCurrentTasks.find(t => t.id === targetId);
+    if (!targetTask) return;
+    const newParentId = targetTask.parent_id || null;
+
+    // 同じ親を持つ兄弟タスクをsort_order順に取得（自分自身を除く）
+    const siblings = ganttCurrentTasks
+      .filter(t => (t.parent_id || null) === (newParentId || null) && t.id !== ganttDraggedTaskId)
+      .sort((a, b) => a.sort_order - b.sort_order);
+    const targetIndex = siblings.findIndex(t => t.id === targetId);
+    const sortOrder = zone === 'above' ? targetIndex : targetIndex + 1;
+
+    // インジケータ解除
+    taskListBody.querySelectorAll('.gantt-drop-above, .gantt-drop-below').forEach(el => {
+      el.classList.remove('gantt-drop-above', 'gantt-drop-below');
+    });
+
+    const res = await fetch(`/api/tasks/${ganttDraggedTaskId}/move`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ parent_id: newParentId, sort_order: sortOrder }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json();
+      alert(err.error || '移動に失敗しました');
+      return;
+    }
+
+    await loadGanttData();
+  });
 
   taskListDiv.appendChild(taskListBody);
 
@@ -2431,9 +2853,22 @@ function createKanbanCard(task) {
   // Load existing sessions on page load
   const res = await fetch('/api/sessions');
   const existing = await res.json();
+
+  // Clean up stale tab records (sessions that no longer exist on server)
+  const activeIds = new Set(existing.map((s) => String(s.id)));
+  const state = loadTabState();
+  for (const sid of Object.keys(state.tabs)) {
+    if (!activeIds.has(sid)) delete state.tabs[sid];
+  }
+  saveTabState(state);
+
   for (const session of existing) {
     addSessionUI(session);
   }
+
+  // renderTabBar is called inside addSessionUI, but call once more to ensure correct order
+  renderTabBar();
+
   if (existing.length > 0) {
     switchTo(existing[0].id);
   }

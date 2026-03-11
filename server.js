@@ -121,11 +121,37 @@ function removeHooks(cwd) {
 function ourPermissionEntries() {
   return [
     `Bash(curl * http://localhost:${PORT}/api/*)`,
+    'Bash(cd:*)',
+    'Bash(CONTAINER=:*)',
+    'Read(/tmp/*)',
+    'Edit(/tmp/*)',
+    'Write(/tmp/*)',
+    'Bash(mv /tmp/*)',
+    'Bash(cp /tmp/*)',
+    'Bash(rm /tmp/*)',
+    'Bash(mkdir /tmp/*)',
+    'Bash(find:*)',
+    'Bash(ls:*)',
   ];
 }
 
+const OUR_STATIC_PERMISSIONS = new Set([
+  'Bash(cd:*)',
+  'Bash(CONTAINER=:*)',
+  'Read(/tmp/*)',
+  'Edit(/tmp/*)',
+  'Write(/tmp/*)',
+  'Bash(mv /tmp/*)',
+  'Bash(cp /tmp/*)',
+  'Bash(rm /tmp/*)',
+  'Bash(mkdir /tmp/*)',
+  'Bash(find:*)',
+  'Bash(ls:*)',
+]);
+
 function isOurPermission(entry) {
-  return /^Bash\(curl \* http:\/\/localhost:\d+\/api\/\*\)$/.test(entry);
+  return /^Bash\(curl \* http:\/\/localhost:\d+\/api\/\*\)$/.test(entry) ||
+    OUR_STATIC_PERMISSIONS.has(entry);
 }
 
 function injectPermissions(cwd) {

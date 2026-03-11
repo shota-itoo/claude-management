@@ -41,6 +41,17 @@
           <button id="btn-new-tab" title="新規ターミナル">+</button>
         </div>
         <div id="terminal-container"></div>
+
+        <!-- Tab context menu -->
+        <div id="tab-context-menu" class="context-menu hidden">
+          <button class="context-menu-item" data-action="new-group">新規グループに追加</button>
+          <div id="context-menu-groups"></div>
+          <div class="context-menu-separator"></div>
+          <button class="context-menu-item" data-action="ungroup">グループから外す</button>
+          <button class="context-menu-item" data-action="change-color">グループの色変更</button>
+          <div id="context-menu-color-picker" class="hidden"></div>
+          <button class="context-menu-item" data-action="delete-group">グループ削除</button>
+        </div>
       </div>
       <div id="sidebar" class="hidden">
         <div class="sidebar-header">

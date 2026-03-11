@@ -219,6 +219,153 @@ html, body {
   border-radius: 2px;
 }
 
+/* Tab groups */
+.tab-group {
+  display: flex;
+  align-items: flex-end;
+  gap: 0;
+  position: relative;
+}
+
+.tab-group .tab {
+  border: 1px solid var(--group-color, #4682E6);
+  border-bottom: 2px solid var(--group-color, #4682E6);
+}
+
+.tab-group.collapsed .tab {
+  display: none;
+}
+
+.tab-group-header {
+  display: flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 6px 6px 0 0;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+  height: 32px;
+  transition: opacity 0.15s;
+}
+
+.tab-group-header:hover {
+  opacity: 0.85;
+}
+
+.tab-group-header .group-collapse-icon {
+  margin-right: 4px;
+  font-size: 10px;
+  transition: transform 0.15s;
+}
+
+.tab-group-header.collapsed .group-collapse-icon {
+  transform: rotate(-90deg);
+}
+
+.tab-group-header .group-label {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tab-group-header .group-count {
+  font-size: 11px;
+  margin-left: 4px;
+  opacity: 0.7;
+}
+
+.tab-group-header.drag-over {
+  opacity: 0.7;
+  outline: 2px dashed #fff;
+  outline-offset: -2px;
+}
+
+.tab-group-rename-input {
+  background: #1e1e1e;
+  border: 1px solid #4682E6;
+  color: #fff;
+  font-size: 12px;
+  padding: 0 4px;
+  width: 100px;
+  outline: none;
+  border-radius: 2px;
+}
+
+/* Context menu */
+.context-menu {
+  position: fixed;
+  z-index: 200;
+  background: #2d2d2d;
+  border: 1px solid #444;
+  border-radius: 4px;
+  padding: 4px 0;
+  min-width: 180px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+}
+
+.context-menu.hidden {
+  display: none;
+}
+
+.context-menu-item {
+  display: block;
+  width: 100%;
+  background: none;
+  border: none;
+  color: #ccc;
+  padding: 6px 16px;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.context-menu-item:hover {
+  background: #4682E6;
+  color: #fff;
+}
+
+.context-menu-separator {
+  height: 1px;
+  background: #444;
+  margin: 4px 0;
+}
+
+.context-menu-color-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+
+#context-menu-color-picker {
+  display: flex;
+  flex-wrap: wrap;
+  padding: 4px 12px;
+  gap: 4px;
+}
+
+#context-menu-color-picker.hidden {
+  display: none;
+}
+
+.context-menu-color-option {
+  display: inline-block;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  cursor: pointer;
+  border: 2px solid transparent;
+  transition: border-color 0.1s;
+}
+
+.context-menu-color-option:hover {
+  border-color: #fff;
+}
+
 /* Terminal container */
 #terminal-container {
   flex: 1;
@@ -1686,6 +1833,16 @@ html, body {
 }
 .gantt-toggle:hover { color: #ddd; }
 .gantt-toggle-hidden { visibility: hidden; }
+
+.gantt-task-list-item.dragging {
+  opacity: 0.4;
+}
+.gantt-task-list-item.gantt-drop-above {
+  box-shadow: 0 -2px 0 0 #4682E6;
+}
+.gantt-task-list-item.gantt-drop-below {
+  box-shadow: 0 2px 0 0 #4682E6;
+}
 
 /* Kanban Board */
 #kanban-container {
