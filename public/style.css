@@ -1807,7 +1807,19 @@ html, body {
 
 .gantt-task-list-body {
   flex: 1;
-  overflow-y: auto;
+  overflow: auto;
+}
+
+.gantt-resize-handle {
+  width: 4px;
+  background: #444;
+  cursor: col-resize;
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+.gantt-resize-handle:hover,
+.gantt-resize-handle.active {
+  background: #4682E6;
 }
 
 .gantt-task-name-clickable {

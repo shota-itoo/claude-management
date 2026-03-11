@@ -2415,8 +2415,43 @@ function renderGanttChart(ganttTasks) {
 
   timelineDiv.appendChild(bodyDiv);
 
+  // リサイズハンドル
+  const resizeHandle = document.createElement('div');
+  resizeHandle.className = 'gantt-resize-handle';
+
   container.appendChild(taskListDiv);
+  container.appendChild(resizeHandle);
   container.appendChild(timelineDiv);
+
+  // リサイズドラッグ処理
+  let isResizing = false;
+  let startX = 0;
+  let startWidth = 0;
+
+  resizeHandle.addEventListener('mousedown', (e) => {
+    isResizing = true;
+    startX = e.clientX;
+    startWidth = taskListDiv.getBoundingClientRect().width;
+    resizeHandle.classList.add('active');
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    e.preventDefault();
+  });
+
+  document.addEventListener('mousemove', (e) => {
+    if (!isResizing) return;
+    const newWidth = Math.min(500, Math.max(150, startWidth + (e.clientX - startX)));
+    taskListDiv.style.width = newWidth + 'px';
+    taskListDiv.style.minWidth = newWidth + 'px';
+  });
+
+  document.addEventListener('mouseup', () => {
+    if (!isResizing) return;
+    isResizing = false;
+    resizeHandle.classList.remove('active');
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+  });
 
   // Sync vertical scrolling between task list body and timeline
   timelineDiv.addEventListener('scroll', () => {
