@@ -9,6 +9,7 @@ if (!sessionId) process.exit(0);
 
 const port = process.env.WEB_TERMINAL_PORT || 3000;
 let defaultStatus = process.argv[2] || 'working';
+const eventName = process.argv[3] || '';
 
 let input = '';
 process.stdin.setEncoding('utf8');
@@ -23,7 +24,7 @@ process.stdin.on('end', () => {
     }
   }
 
-  const body = JSON.stringify({ sessionId, status: defaultStatus });
+  const body = JSON.stringify({ sessionId, status: defaultStatus, event: eventName });
   const req = http.request({
     hostname: 'localhost',
     port,
