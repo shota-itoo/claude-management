@@ -5,7 +5,7 @@ const pty = require('node-pty');
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
-const db = require('./db');
+const { init: initDb, getDb } = require('./db');
 
 const app = express();
 const server = http.createServer(app);
@@ -36,7 +36,7 @@ app.use('/attachments', express.static(TMP_IMAGES_DIR));
 const sessions = new Map();
 let nextId = 1;
 
-const HOOK_SCRIPT = path.join(__dirname, 'hook.js');
+const HOOK_SCRIPT = path.join(__dirname, 'hook.js').replace(/\\/g, '/');
 const PORT = process.env.PORT || 3100;
 
 // --- Hooks injection into .claude/settings.local.json ---
@@ -118,40 +118,28 @@ function removeHooks(cwd) {
 
 // --- Permissions injection into .claude/settings.local.json ---
 
+const TMPDIR = require('os').tmpdir().replace(/\\/g, '/');
+
 function ourPermissionEntries() {
   return [
     `Bash(curl * http://localhost:${PORT}/api/*)`,
     'Bash(cd:*)',
     'Bash(CONTAINER=:*)',
-    'Read(/tmp/*)',
-    'Edit(/tmp/*)',
-    'Write(/tmp/*)',
-    'Bash(mv /tmp/*)',
-    'Bash(cp /tmp/*)',
-    'Bash(rm /tmp/*)',
-    'Bash(mkdir /tmp/*)',
+    `Read(${TMPDIR}/*)`,
+    `Edit(${TMPDIR}/*)`,
+    `Write(${TMPDIR}/*)`,
+    `Bash(mv ${TMPDIR}/*)`,
+    `Bash(cp ${TMPDIR}/*)`,
+    `Bash(rm ${TMPDIR}/*)`,
+    `Bash(mkdir ${TMPDIR}/*)`,
     'Bash(find:*)',
     'Bash(ls:*)',
   ];
 }
 
-const OUR_STATIC_PERMISSIONS = new Set([
-  'Bash(cd:*)',
-  'Bash(CONTAINER=:*)',
-  'Read(/tmp/*)',
-  'Edit(/tmp/*)',
-  'Write(/tmp/*)',
-  'Bash(mv /tmp/*)',
-  'Bash(cp /tmp/*)',
-  'Bash(rm /tmp/*)',
-  'Bash(mkdir /tmp/*)',
-  'Bash(find:*)',
-  'Bash(ls:*)',
-]);
-
 function isOurPermission(entry) {
   return /^Bash\(curl \* http:\/\/localhost:\d+\/api\/\*\)$/.test(entry) ||
-    OUR_STATIC_PERMISSIONS.has(entry);
+    ourPermissionEntries().includes(entry);
 }
 
 function injectPermissions(cwd) {
@@ -303,13 +291,24 @@ app.post('/api/sessions', (req, res) => {
   const name = req.body?.name || `Session ${id}`;
   const cwd = req.body?.cwd;
   if (!cwd) return res.status(400).json({ error: 'cwd is required' });
-  const cmd = req.body?.cmd || 'claude';
+  let cmd = req.body?.cmd || 'claude';
   const args = req.body?.args || [];
+
+  // On Windows, node-pty needs the full path or .exe extension to find the executable
+  if (process.platform === 'win32' && !cmd.includes('.') && !path.isAbsolute(cmd)) {
+    const { execSync } = require('child_process');
+    try {
+      const resolved = execSync(`where ${cmd}`, { encoding: 'utf-8' }).trim().split(/\r?\n/)[0];
+      if (resolved) cmd = resolved;
+    } catch {}
+  }
 
   // Resolve projectId: from request or lookup by cwd
   let projectId = req.body?.projectId || null;
   if (!projectId) {
-    const project = db.prepare('SELECT id FROM projects WHERE directory = ?').get(cwd);
+    const project = process.platform === 'win32'
+      ? getDb().prepare('SELECT id FROM projects WHERE LOWER(directory) = LOWER(?)').get(cwd)
+      : getDb().prepare('SELECT id FROM projects WHERE directory = ?').get(cwd);
     if (project) projectId = project.id;
   }
 
@@ -374,7 +373,7 @@ app.delete('/api/sessions/:id', (req, res) => {
 // --- Project API ---
 
 app.get('/api/projects', (req, res) => {
-  const projects = db.prepare('SELECT * FROM projects ORDER BY created_at DESC').all();
+  const projects = getDb().prepare('SELECT * FROM projects ORDER BY created_at DESC').all();
   res.json(projects);
 });
 
@@ -390,12 +389,12 @@ app.post('/api/projects', (req, res) => {
     return res.status(400).json({ error: 'Directory does not exist' });
   }
   try {
-    const result = db.prepare('INSERT INTO projects (name, directory, code) VALUES (?, ?, ?)').run(name, directory, code);
-    const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(result.lastInsertRowid);
+    const result = getDb().prepare('INSERT INTO projects (name, directory, code) VALUES (?, ?, ?)').run(name, directory, code);
+    const project = getDb().prepare('SELECT * FROM projects WHERE id = ?').get(result.lastInsertRowid);
     res.json(project);
   } catch (e) {
     if (e.code === 'SQLITE_CONSTRAINT_UNIQUE') {
-      const existing = db.prepare('SELECT code FROM projects WHERE code = ?').get(code);
+      const existing = getDb().prepare('SELECT code FROM projects WHERE code = ?').get(code);
       if (existing) return res.status(409).json({ error: 'Project code already exists' });
       return res.status(409).json({ error: 'Directory already registered' });
     }
@@ -405,7 +404,7 @@ app.post('/api/projects', (req, res) => {
 
 app.patch('/api/projects/:id', (req, res) => {
   const { id } = req.params;
-  const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(id);
+  const project = getDb().prepare('SELECT * FROM projects WHERE id = ?').get(id);
   if (!project) return res.status(404).json({ error: 'Project not found' });
 
   const allowed = ['name', 'code', 'directory', 'notes'];
@@ -427,8 +426,8 @@ app.patch('/api/projects/:id', (req, res) => {
 
   values.push(id);
   try {
-    db.prepare(`UPDATE projects SET ${updates.join(', ')} WHERE id = ?`).run(...values);
-    const updated = db.prepare('SELECT * FROM projects WHERE id = ?').get(id);
+    getDb().prepare(`UPDATE projects SET ${updates.join(', ')} WHERE id = ?`).run(...values);
+    const updated = getDb().prepare('SELECT * FROM projects WHERE id = ?').get(id);
     res.json(updated);
   } catch (e) {
     if (e.code === 'SQLITE_CONSTRAINT_UNIQUE') {
@@ -439,7 +438,7 @@ app.patch('/api/projects/:id', (req, res) => {
 });
 
 app.delete('/api/projects/:id', (req, res) => {
-  const result = db.prepare('DELETE FROM projects WHERE id = ?').run(req.params.id);
+  const result = getDb().prepare('DELETE FROM projects WHERE id = ?').run(req.params.id);
   if (result.changes === 0) return res.status(404).json({ error: 'Project not found' });
   res.json({ ok: true });
 });
@@ -447,7 +446,7 @@ app.delete('/api/projects/:id', (req, res) => {
 // --- Task API ---
 
 app.get('/api/tasks/all', (req, res) => {
-  const allTasks = db.prepare(
+  const allTasks = getDb().prepare(
     `SELECT t.*, p.name as project_name, p.code as project_code
      FROM tasks t JOIN projects p ON t.project_id = p.id
      ORDER BY t.project_id, t.sort_order ASC, t.created_at ASC`
@@ -457,16 +456,16 @@ app.get('/api/tasks/all', (req, res) => {
 
 app.get('/api/projects/:projectId/tasks', (req, res) => {
   const { projectId } = req.params;
-  const project = db.prepare('SELECT id FROM projects WHERE id = ?').get(projectId);
+  const project = getDb().prepare('SELECT id FROM projects WHERE id = ?').get(projectId);
   if (!project) return res.status(404).json({ error: 'Project not found' });
 
-  const tasks = db.prepare('SELECT * FROM tasks WHERE project_id = ? ORDER BY sort_order ASC, created_at ASC').all(projectId);
+  const tasks = getDb().prepare('SELECT * FROM tasks WHERE project_id = ? ORDER BY sort_order ASC, created_at ASC').all(projectId);
   res.json(tasks);
 });
 
 app.post('/api/projects/:projectId/tasks', (req, res) => {
   const { projectId } = req.params;
-  const project = db.prepare('SELECT id FROM projects WHERE id = ?').get(projectId);
+  const project = getDb().prepare('SELECT id FROM projects WHERE id = ?').get(projectId);
   if (!project) return res.status(404).json({ error: 'Project not found' });
 
   const { title, description, parent_id, target_paths } = req.body;
@@ -474,29 +473,29 @@ app.post('/api/projects/:projectId/tasks', (req, res) => {
 
   let depth = 0;
   if (parent_id) {
-    const parent = db.prepare('SELECT depth FROM tasks WHERE id = ? AND project_id = ?').get(parent_id, projectId);
+    const parent = getDb().prepare('SELECT depth FROM tasks WHERE id = ? AND project_id = ?').get(parent_id, projectId);
     if (!parent) return res.status(400).json({ error: 'Parent task not found' });
     depth = parent.depth + 1;
     if (depth > 4) return res.status(400).json({ error: 'Maximum depth (5 levels) exceeded' });
   }
 
-  const maxOrder = db.prepare('SELECT MAX(sort_order) as max FROM tasks WHERE project_id = ? AND parent_id IS ?').get(projectId, parent_id || null);
+  const maxOrder = getDb().prepare('SELECT MAX(sort_order) as max FROM tasks WHERE project_id = ? AND parent_id IS ?').get(projectId, parent_id || null);
   const sort_order = (maxOrder?.max ?? -1) + 1;
 
   const targetPathsJson = Array.isArray(target_paths) ? JSON.stringify(target_paths) : null;
 
-  const result = db.prepare(
+  const result = getDb().prepare(
     'INSERT INTO tasks (project_id, parent_id, title, description, depth, sort_order, target_paths) VALUES (?, ?, ?, ?, ?, ?, ?)'
   ).run(projectId, parent_id || null, title, description || '', depth, sort_order, targetPathsJson);
 
-  const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(result.lastInsertRowid);
+  const task = getDb().prepare('SELECT * FROM tasks WHERE id = ?').get(result.lastInsertRowid);
   io.emit('tasks.changed', { projectId: Number(projectId) });
   res.json(task);
 });
 
 app.patch('/api/tasks/:taskId', (req, res) => {
   const { taskId } = req.params;
-  const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
+  const task = getDb().prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
   if (!task) return res.status(404).json({ error: 'Task not found' });
 
   const allowed = ['title', 'description', 'status', 'start_date', 'due_date', 'target_paths'];
@@ -517,16 +516,16 @@ app.patch('/api/tasks/:taskId', (req, res) => {
 
   updates.push("updated_at = datetime('now')");
   values.push(taskId);
-  db.prepare(`UPDATE tasks SET ${updates.join(', ')} WHERE id = ?`).run(...values);
+  getDb().prepare(`UPDATE tasks SET ${updates.join(', ')} WHERE id = ?`).run(...values);
 
-  const updated = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
+  const updated = getDb().prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
   io.emit('tasks.changed', { projectId: updated.project_id });
   res.json(updated);
 });
 
 app.patch('/api/tasks/:taskId/move', (req, res) => {
   const { taskId } = req.params;
-  const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
+  const task = getDb().prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
   if (!task) return res.status(404).json({ error: 'Task not found' });
 
   const { parent_id, sort_order } = req.body;
@@ -539,7 +538,7 @@ app.patch('/api/tasks/:taskId/move', (req, res) => {
       if (String(cur) === String(taskId)) {
         return res.status(400).json({ error: 'Cannot move a task under its own descendant' });
       }
-      const p = db.prepare('SELECT parent_id FROM tasks WHERE id = ?').get(cur);
+      const p = getDb().prepare('SELECT parent_id FROM tasks WHERE id = ?').get(cur);
       cur = p ? p.parent_id : null;
     }
   }
@@ -547,7 +546,7 @@ app.patch('/api/tasks/:taskId/move', (req, res) => {
   // Calculate new depth
   let newDepth = 0;
   if (newParentId) {
-    const parent = db.prepare('SELECT depth FROM tasks WHERE id = ?').get(newParentId);
+    const parent = getDb().prepare('SELECT depth FROM tasks WHERE id = ?').get(newParentId);
     if (!parent) return res.status(400).json({ error: 'Parent task not found' });
     newDepth = parent.depth + 1;
   }
@@ -560,20 +559,20 @@ app.patch('/api/tasks/:taskId/move', (req, res) => {
   }
 
   // Update task
-  db.prepare('UPDATE tasks SET parent_id = ?, depth = ?, sort_order = ?, updated_at = datetime(\'now\') WHERE id = ?')
+  getDb().prepare('UPDATE tasks SET parent_id = ?, depth = ?, sort_order = ?, updated_at = datetime(\'now\') WHERE id = ?')
     .run(newParentId, newDepth, sort_order ?? 0, taskId);
 
   // Recursively update children depths
   updateChildDepths(taskId, newDepth);
 
-  const updated = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
+  const updated = getDb().prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
   io.emit('tasks.changed', { projectId: updated.project_id });
   res.json(updated);
 });
 
 function getMaxSubtreeDepth(taskId, currentDepth) {
   let max = currentDepth;
-  const children = db.prepare('SELECT id, depth FROM tasks WHERE parent_id = ?').all(taskId);
+  const children = getDb().prepare('SELECT id, depth FROM tasks WHERE parent_id = ?').all(taskId);
   for (const child of children) {
     const childMax = getMaxSubtreeDepth(child.id, child.depth);
     if (childMax > max) max = childMax;
@@ -582,9 +581,9 @@ function getMaxSubtreeDepth(taskId, currentDepth) {
 }
 
 function updateChildDepths(parentId, parentDepth) {
-  const children = db.prepare('SELECT id FROM tasks WHERE parent_id = ?').all(parentId);
+  const children = getDb().prepare('SELECT id FROM tasks WHERE parent_id = ?').all(parentId);
   for (const child of children) {
-    db.prepare('UPDATE tasks SET depth = ? WHERE id = ?').run(parentDepth + 1, child.id);
+    getDb().prepare('UPDATE tasks SET depth = ? WHERE id = ?').run(parentDepth + 1, child.id);
     updateChildDepths(child.id, parentDepth + 1);
   }
 }
@@ -593,7 +592,7 @@ function updateChildDepths(parentId, parentDepth) {
 
 app.get('/api/projects/:projectId/paths', (req, res) => {
   const { projectId } = req.params;
-  const project = db.prepare('SELECT directory FROM projects WHERE id = ?').get(projectId);
+  const project = getDb().prepare('SELECT directory FROM projects WHERE id = ?').get(projectId);
   if (!project) return res.status(404).json({ error: 'Project not found' });
 
   const query = req.query.q || '';
@@ -610,7 +609,7 @@ app.get('/api/projects/:projectId/paths', (req, res) => {
       .filter((e) => !prefix || e.name.toLowerCase().startsWith(prefix.toLowerCase()))
       .slice(0, 50)
       .map((e) => {
-        const relativePath = path.relative(baseDir, path.join(parentDir, e.name));
+        const relativePath = path.relative(baseDir, path.join(parentDir, e.name)).replace(/\\/g, '/');
         return {
           name: e.name,
           path: relativePath,
@@ -631,12 +630,12 @@ app.get('/api/projects/:projectId/paths', (req, res) => {
 
 app.delete('/api/tasks/:taskId', (req, res) => {
   const { taskId } = req.params;
-  const task = db.prepare('SELECT project_id FROM tasks WHERE id = ?').get(taskId);
+  const task = getDb().prepare('SELECT project_id FROM tasks WHERE id = ?').get(taskId);
 
   // Collect all descendant task IDs to clean up attachments
   const taskIdsToClean = [taskId];
   function collectChildIds(parentId) {
-    const children = db.prepare('SELECT id FROM tasks WHERE parent_id = ?').all(parentId);
+    const children = getDb().prepare('SELECT id FROM tasks WHERE parent_id = ?').all(parentId);
     for (const child of children) {
       taskIdsToClean.push(String(child.id));
       collectChildIds(child.id);
@@ -644,7 +643,7 @@ app.delete('/api/tasks/:taskId', (req, res) => {
   }
   collectChildIds(taskId);
 
-  const result = db.prepare('DELETE FROM tasks WHERE id = ?').run(taskId);
+  const result = getDb().prepare('DELETE FROM tasks WHERE id = ?').run(taskId);
   if (result.changes === 0) return res.status(404).json({ error: 'Task not found' });
 
   // Clean up attachment directories
@@ -663,7 +662,7 @@ app.delete('/api/tasks/:taskId', (req, res) => {
 
 app.post('/api/tasks/:taskId/attachments', upload.array('files', 20), (req, res) => {
   const { taskId } = req.params;
-  const task = db.prepare('SELECT id FROM tasks WHERE id = ?').get(taskId);
+  const task = getDb().prepare('SELECT id FROM tasks WHERE id = ?').get(taskId);
   if (!task) return res.status(404).json({ error: 'Task not found' });
 
   const files = (req.files || []).map((f) => ({
@@ -797,7 +796,7 @@ function cleanupAll() {
   }
   sessions.clear();
   // Remove skill files and permissions after all sessions are cleared
-  const projects = db.prepare('SELECT directory FROM projects').all();
+  const projects = getDb().prepare('SELECT directory FROM projects').all();
   for (const { directory } of projects) {
     removePermissions(directory);
     removeTaskSkill(directory);
@@ -811,7 +810,7 @@ process.on('SIGTERM', () => { cleanupAll(); process.exit(0); });
 
 // Clean up stale hooks from all registered projects on startup
 function cleanupStaleHooks() {
-  const projects = db.prepare('SELECT directory FROM projects').all();
+  const projects = getDb().prepare('SELECT directory FROM projects').all();
   for (const { directory } of projects) {
     removeHooks(directory);
     removePermissions(directory);
@@ -820,8 +819,12 @@ function cleanupStaleHooks() {
   console.log(`Cleaned up hooks, permissions and skills for ${projects.length} projects`);
 }
 
-cleanupStaleHooks();
-
-server.listen(PORT, () => {
-  console.log(`Web Terminal Manager running at http://localhost:${PORT}`);
+initDb().then(() => {
+  cleanupStaleHooks();
+  server.listen(PORT, () => {
+    console.log(`Web Terminal Manager running at http://localhost:${PORT}`);
+  });
+}).catch((err) => {
+  console.error('Failed to initialize database:', err);
+  process.exit(1);
 });
