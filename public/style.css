@@ -678,6 +678,48 @@ html, body {
   margin-top: 2px;
 }
 
+.session-list-item {
+  padding: 10px 12px;
+  border-bottom: 1px solid #333;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.session-list-item:hover {
+  background: #383838;
+}
+.session-list-item:last-child {
+  border-bottom: none;
+}
+.session-title {
+  font-size: 13px;
+  color: #ddd;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.session-meta {
+  font-size: 11px;
+  color: #888;
+  margin-top: 2px;
+}
+.session-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 32px 12px;
+  color: #888;
+  font-size: 13px;
+}
+.session-loading .spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid #444;
+  border-top-color: #4682E6;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+
 /* Sidebar tabs */
 .sidebar-tabs {
   display: flex;
@@ -1100,7 +1142,7 @@ html, body {
   border: 1px solid #444;
   border-radius: 4px;
   padding: 10px;
-  margin: 4px 8px 4px 0;
+  margin: 4px 0;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -1855,6 +1897,9 @@ html, body {
 .gantt-task-list-item.gantt-drop-below {
   box-shadow: 0 2px 0 0 #4682E6;
 }
+.gantt-task-list-item.gantt-drop-inside {
+  background: rgba(70, 130, 230, 0.15);
+}
 
 /* Kanban Board */
 #kanban-container {
@@ -1930,6 +1975,7 @@ html, body {
   border-radius: 6px;
   padding: 10px 12px;
   margin-bottom: 8px;
+  cursor: pointer;
   cursor: grab;
   transition: border-color 0.15s, box-shadow 0.15s;
 }
@@ -1981,6 +2027,71 @@ html, body {
   color: #555;
   padding: 24px 12px;
   font-size: 13px;
+}
+
+.kanban-detail-popover {
+  position: absolute;
+  z-index: 10;
+  width: 320px;
+  background: #2a2a2a;
+  border: 1px solid #444;
+  border-radius: 6px;
+  padding: 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.kanban-detail-popover .task-detail-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.kanban-detail-popover .task-detail-field label {
+  font-size: 11px;
+  color: #888;
+}
+
+.kanban-detail-popover .task-detail-input,
+.kanban-detail-popover .task-detail-textarea,
+.kanban-detail-popover .task-detail-select,
+.kanban-detail-popover .task-detail-date {
+  background: #1e1e1e;
+  border: 1px solid #555;
+  color: #ddd;
+  padding: 5px 8px;
+  border-radius: 4px;
+  font-size: 13px;
+  outline: none;
+  font-family: inherit;
+}
+
+.kanban-detail-popover .task-detail-input:focus,
+.kanban-detail-popover .task-detail-textarea:focus,
+.kanban-detail-popover .task-detail-select:focus,
+.kanban-detail-popover .task-detail-date:focus {
+  border-color: #4682E6;
+}
+
+.kanban-detail-popover .task-detail-textarea {
+  resize: vertical;
+  min-height: 40px;
+}
+
+.kanban-detail-popover .task-detail-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.kanban-detail-popover .task-detail-actions button {
+  border: none;
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
 }
 
 /* Attachment UI */

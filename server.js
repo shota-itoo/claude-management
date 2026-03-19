@@ -4,6 +4,7 @@ const { Server } = require('socket.io');
 const pty = require('node-pty');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const multer = require('multer');
 const db = require('./db');
 
@@ -453,6 +454,62 @@ app.get('/api/tasks/all', (req, res) => {
      ORDER BY t.project_id, t.sort_order ASC, t.created_at ASC`
   ).all();
   res.json(allTasks);
+});
+
+// --- Claude Session History API ---
+
+app.get('/api/projects/:projectId/sessions', (req, res) => {
+  const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.projectId);
+  if (!project) return res.status(404).json({ error: 'Project not found' });
+
+  const encodedPath = project.directory.replace(/\//g, '-');
+  const sessionsDir = path.join(os.homedir(), '.claude', 'projects', encodedPath);
+
+  if (!fs.existsSync(sessionsDir)) return res.json([]);
+
+  const files = fs.readdirSync(sessionsDir).filter(f => f.endsWith('.jsonl'));
+  const results = [];
+
+  for (const f of files) {
+    const sessionId = f.replace('.jsonl', '');
+    const filePath = path.join(sessionsDir, f);
+    let stat;
+    try { stat = fs.statSync(filePath); } catch { continue; }
+
+    let title = '(無題)';
+    let firstUserMsg = null;
+    try {
+      const data = fs.readFileSync(filePath, 'utf8');
+      const lines = data.split('\n');
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const d = JSON.parse(line);
+          if (d.type === 'user') {
+            const content = d.message?.content;
+            let text = '';
+            if (typeof content === 'string') text = content;
+            else if (Array.isArray(content)) {
+              for (const c of content) {
+                if (c.type === 'text') { text = c.text; break; }
+              }
+            }
+            const m = text.match(/<command-args>(.*?)<\/command-args>/);
+            if (m) title = m[1];
+            if (!firstUserMsg && text && !text.startsWith('<')) {
+              firstUserMsg = text.slice(0, 100);
+            }
+          }
+        } catch {}
+      }
+      if (title === '(無題)' && firstUserMsg) title = firstUserMsg;
+    } catch {}
+
+    results.push({ sessionId, title, updatedAt: stat.mtime.toISOString() });
+  }
+
+  results.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+  res.json(results);
 });
 
 app.get('/api/projects/:projectId/tasks', (req, res) => {

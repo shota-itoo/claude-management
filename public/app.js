@@ -195,6 +195,8 @@ function toggleSidebar() {
 
 // --- Project select modal ---
 
+let projectSelectCallback = null;
+
 function openProjectSelectModal() {
   renderModalProjects();
   modal.classList.remove('hidden');
@@ -219,10 +221,75 @@ function renderModalProjects() {
     `;
     el.addEventListener('click', () => {
       closeProjectSelectModal();
-      createSessionWithProject(p);
+      if (projectSelectCallback) {
+        const cb = projectSelectCallback;
+        projectSelectCallback = null;
+        cb(p);
+      } else {
+        createSessionWithProject(p);
+      }
     });
     modalProjectList.appendChild(el);
   }
+}
+
+// --- Session resume ---
+
+function openProjectSelectForResume() {
+  projectSelectCallback = async (project) => {
+    const sessionModal = document.getElementById('session-list-modal');
+    const listEl = document.getElementById('modal-session-list');
+    // ローディング表示してからモーダルを開く
+    listEl.innerHTML = '<div class="session-loading"><div class="spinner"></div>セッション一覧を読み込み中...</div>';
+    sessionModal.querySelector('.modal-close').onclick = () => sessionModal.classList.add('hidden');
+    sessionModal.querySelector('.modal-backdrop').onclick = () => sessionModal.classList.add('hidden');
+    sessionModal.classList.remove('hidden');
+
+    const res = await fetch(`/api/projects/${project.id}/sessions`);
+    if (!res.ok) { sessionModal.classList.add('hidden'); return; }
+    const sessions = await res.json();
+    renderSessionList(sessionModal, listEl, project, sessions);
+  };
+  openProjectSelectModal();
+}
+
+function renderSessionList(sessionModal, listEl, project, sessions) {
+  listEl.innerHTML = '';
+
+  if (sessions.length === 0) {
+    listEl.innerHTML = '<div class="modal-empty">過去のセッションがありません</div>';
+  } else {
+    for (const s of sessions) {
+      const item = document.createElement('div');
+      item.className = 'session-list-item';
+      item.innerHTML = `
+        <div class="session-title">${escapeHtml(s.title)}</div>
+        <div class="session-meta">${new Date(s.updatedAt).toLocaleString('ja-JP')} — ${s.sessionId.slice(0, 8)}</div>
+      `;
+      item.addEventListener('click', () => {
+        sessionModal.classList.add('hidden');
+        resumeSession(project, s.sessionId);
+      });
+      listEl.appendChild(item);
+    }
+  }
+}
+
+async function resumeSession(project, sessionId) {
+  const res = await fetch('/api/sessions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      cwd: project.directory,
+      name: project.name,
+      projectId: project.id,
+      args: ['--resume', sessionId],
+    }),
+  });
+  if (!res.ok) return;
+  const session = await res.json();
+  addSessionUI(session);
+  switchTo(session.id);
 }
 
 // --- Session management ---
@@ -891,6 +958,7 @@ document.addEventListener('click', closeAllMenus);
 // --- Event listeners ---
 
 btnNew.addEventListener('click', () => { closeAllMenus(); openProjectSelectModal(); });
+document.getElementById('btn-resume').addEventListener('click', () => { closeAllMenus(); openProjectSelectForResume(); });
 document.getElementById('btn-new-tab').addEventListener('click', openProjectSelectModal);
 document.getElementById('btn-rename-tab').addEventListener('click', () => {
   closeAllMenus();
@@ -952,6 +1020,7 @@ function switchSidebarMode(mode) {
 
   if (mode === 'tasks') {
     updateProjectMultiselect();
+    collapsedTasks.clear();
     loadSelectedTasks();
   }
 }
@@ -978,6 +1047,7 @@ function updateProjectMultiselect() {
       else selectedProjectIds.delete(p.id);
       updateMultiselectDisplayText();
       updateCreateProjectSelect();
+      collapsedTasks.clear();
       loadSelectedTasks();
     });
     const span = document.createElement('span');
@@ -1046,12 +1116,13 @@ async function loadSelectedTasks() {
     const allTasks = await res.json();
     tasks = allTasks.filter(t => selectedProjectIds.has(t.project_id));
   }
-  // 初期表示時: ルートレベルのトグルをすべて閉じる
-  collapsedTasks.clear();
-  const tree = buildTaskTree(tasks);
-  for (const node of tree) {
-    if (node.children.length > 0) {
-      collapsedTasks.add(node.id);
+  // 初期表示時のみ: ルートレベルのトグルをすべて閉じる（再ロード時はユーザーの状態を維持）
+  if (collapsedTasks.size === 0) {
+    const tree = buildTaskTree(tasks);
+    for (const node of tree) {
+      if (node.children.length > 0) {
+        collapsedTasks.add(node.id);
+      }
     }
   }
   renderTaskList();
@@ -1266,7 +1337,8 @@ function toggleTaskDetail(node, el) {
 
   const panel = document.createElement('div');
   panel.className = 'task-detail';
-  panel.style.marginLeft = `${8 + node.depth * 16}px`;
+  panel.style.marginLeft = `${-(node.depth * 18)}px`;
+  panel.style.marginRight = '-8px';
 
   const currentPaths = safeParseTargetPaths(node.target_paths);
 
@@ -2142,23 +2214,36 @@ function renderGanttChart(ganttTasks) {
     }
   }
 
-  // Gantt drag & drop for reordering
+  // Gantt drag & drop for reordering and nesting
   let ganttDraggedTaskId = null;
+  let ganttDraggedDescendants = new Set();
+
+  function clearGanttDropIndicators() {
+    taskListBody.querySelectorAll('.gantt-drop-above, .gantt-drop-below, .gantt-drop-inside').forEach(el => {
+      el.classList.remove('gantt-drop-above', 'gantt-drop-below', 'gantt-drop-inside');
+    });
+  }
 
   taskListBody.addEventListener('dragstart', (e) => {
     const item = e.target.closest('.gantt-task-list-item');
     if (!item) return;
     ganttDraggedTaskId = Number(item.dataset.taskId);
+    ganttDraggedDescendants = new Set();
+    const findDesc = (pid) => {
+      for (const t of ganttCurrentTasks) {
+        if (t.parent_id === pid) { ganttDraggedDescendants.add(t.id); findDesc(t.id); }
+      }
+    };
+    findDesc(ganttDraggedTaskId);
     item.classList.add('dragging');
     e.dataTransfer.effectAllowed = 'move';
   });
 
   taskListBody.addEventListener('dragend', () => {
     taskListBody.querySelectorAll('.dragging').forEach(el => el.classList.remove('dragging'));
-    taskListBody.querySelectorAll('.gantt-drop-above, .gantt-drop-below').forEach(el => {
-      el.classList.remove('gantt-drop-above', 'gantt-drop-below');
-    });
+    clearGanttDropIndicators();
     ganttDraggedTaskId = null;
+    ganttDraggedDescendants = new Set();
   });
 
   taskListBody.addEventListener('dragover', (e) => {
@@ -2166,21 +2251,49 @@ function renderGanttChart(ganttTasks) {
     const item = e.target.closest('.gantt-task-list-item');
     if (!item) return;
     const targetId = Number(item.dataset.taskId);
-    if (targetId === ganttDraggedTaskId) return;
 
+    // 自分自身・子孫へのドロップを禁止
+    if (targetId === ganttDraggedTaskId || ganttDraggedDescendants.has(targetId)) {
+      e.dataTransfer.dropEffect = 'none';
+      return;
+    }
+
+    // 3ゾーン判定: 上25%=above, 中50%=inside, 下25%=below
     const rect = item.getBoundingClientRect();
-    const zone = (e.clientY - rect.top) < rect.height / 2 ? 'above' : 'below';
+    const y = e.clientY - rect.top;
+    const h = rect.height;
+    let zone;
+    if (y < h * 0.25) zone = 'above';
+    else if (y > h * 0.75) zone = 'below';
+    else zone = 'inside';
+
+    // inside の深さ制限チェック（max depth 4）
+    if (zone === 'inside') {
+      const targetTask = ganttCurrentTasks.find(t => t.id === targetId);
+      const targetDepth = targetTask ? targetTask.depth : 0;
+      const dragTask = ganttCurrentTasks.find(t => t.id === ganttDraggedTaskId);
+      let maxSub = dragTask ? dragTask.depth : 0;
+      const checkSub = (pid) => {
+        for (const t of ganttCurrentTasks) {
+          if (t.parent_id === pid) { if (t.depth > maxSub) maxSub = t.depth; checkSub(t.id); }
+        }
+      };
+      checkSub(ganttDraggedTaskId);
+      const relativeDepth = maxSub - (dragTask ? dragTask.depth : 0);
+      if (targetDepth + 1 + relativeDepth > 4) {
+        e.dataTransfer.dropEffect = 'none';
+        return;
+      }
+    }
 
     e.dataTransfer.dropEffect = 'move';
-    taskListBody.querySelectorAll('.gantt-drop-above, .gantt-drop-below').forEach(el => {
-      el.classList.remove('gantt-drop-above', 'gantt-drop-below');
-    });
+    clearGanttDropIndicators();
     item.classList.add(`gantt-drop-${zone}`);
   });
 
   taskListBody.addEventListener('dragleave', (e) => {
     const item = e.target.closest('.gantt-task-list-item');
-    if (item) item.classList.remove('gantt-drop-above', 'gantt-drop-below');
+    if (item) item.classList.remove('gantt-drop-above', 'gantt-drop-below', 'gantt-drop-inside');
   });
 
   taskListBody.addEventListener('drop', async (e) => {
@@ -2189,26 +2302,35 @@ function renderGanttChart(ganttTasks) {
     if (!item || ganttDraggedTaskId === null) return;
 
     const targetId = Number(item.dataset.taskId);
-    if (targetId === ganttDraggedTaskId) return;
+    if (targetId === ganttDraggedTaskId || ganttDraggedDescendants.has(targetId)) return;
 
     const rect = item.getBoundingClientRect();
-    const zone = (e.clientY - rect.top) < rect.height / 2 ? 'above' : 'below';
+    const y = e.clientY - rect.top;
+    const h = rect.height;
+    let zone;
+    if (y < h * 0.25) zone = 'above';
+    else if (y > h * 0.75) zone = 'below';
+    else zone = 'inside';
 
     const targetTask = ganttCurrentTasks.find(t => t.id === targetId);
     if (!targetTask) return;
-    const newParentId = targetTask.parent_id || null;
 
-    // 同じ親を持つ兄弟タスクをsort_order順に取得（自分自身を除く）
-    const siblings = ganttCurrentTasks
-      .filter(t => (t.parent_id || null) === (newParentId || null) && t.id !== ganttDraggedTaskId)
-      .sort((a, b) => a.sort_order - b.sort_order);
-    const targetIndex = siblings.findIndex(t => t.id === targetId);
-    const sortOrder = zone === 'above' ? targetIndex : targetIndex + 1;
+    let newParentId, sortOrder;
 
-    // インジケータ解除
-    taskListBody.querySelectorAll('.gantt-drop-above, .gantt-drop-below').forEach(el => {
-      el.classList.remove('gantt-drop-above', 'gantt-drop-below');
-    });
+    if (zone === 'inside') {
+      newParentId = targetId;
+      const siblings = ganttCurrentTasks.filter(t => t.parent_id === targetId);
+      sortOrder = siblings.length;
+    } else {
+      newParentId = targetTask.parent_id || null;
+      const siblings = ganttCurrentTasks
+        .filter(t => (t.parent_id || null) === (newParentId || null) && t.id !== ganttDraggedTaskId)
+        .sort((a, b) => a.sort_order - b.sort_order);
+      const targetIndex = siblings.findIndex(t => t.id === targetId);
+      sortOrder = zone === 'above' ? targetIndex : targetIndex + 1;
+    }
+
+    clearGanttDropIndicators();
 
     const res = await fetch(`/api/tasks/${ganttDraggedTaskId}/move`, {
       method: 'PATCH',
@@ -2728,6 +2850,139 @@ async function promptAndAddChildTask(parentId, projectId) {
 // --- Kanban Board ---
 
 let kanbanSelectedProjectValue = null;
+let kanbanDetailPopover = null;
+let kanbanDragged = false;
+
+function closeKanbanTaskDetail() {
+  if (kanbanDetailPopover) {
+    kanbanDetailPopover.remove();
+    kanbanDetailPopover = null;
+  }
+}
+
+function openKanbanTaskDetail(task, anchorEl) {
+  closeKanbanTaskDetail();
+
+  const popover = document.createElement('div');
+  popover.className = 'kanban-detail-popover';
+  kanbanDetailPopover = popover;
+
+  popover.innerHTML = `
+    <div class="task-detail-field">
+      <label>タイトル</label>
+      <input type="text" class="task-detail-input" value="${escapeHtml(task.title)}">
+    </div>
+    <div class="task-detail-field">
+      <label>メモ</label>
+      <textarea class="task-detail-textarea" rows="3">${escapeHtml(task.description || '')}</textarea>
+    </div>
+    <div class="task-detail-field">
+      <label>ステータス</label>
+      <select class="task-detail-select">
+        <option value="todo" ${task.status === 'todo' ? 'selected' : ''}>未着手</option>
+        <option value="in_progress" ${task.status === 'in_progress' ? 'selected' : ''}>進行中</option>
+        <option value="review" ${task.status === 'review' ? 'selected' : ''}>レビュー</option>
+        <option value="done" ${task.status === 'done' ? 'selected' : ''}>完了</option>
+      </select>
+    </div>
+    <div class="task-detail-field">
+      <label>開始日</label>
+      <input type="date" class="task-detail-date kanban-popover-start" value="${task.start_date || ''}">
+    </div>
+    <div class="task-detail-field">
+      <label>期日</label>
+      <input type="date" class="task-detail-date kanban-popover-due" value="${task.due_date || ''}">
+    </div>
+    ${(task.status !== 'done' && task.status !== 'review') ? `
+    <div class="task-detail-actions">
+      <button class="task-detail-assign">タスク割当</button>
+      <button class="task-detail-assign-new">新規セッション割当</button>
+    </div>` : ''}
+    <div class="task-detail-actions">
+      <button class="task-detail-save">保存</button>
+      <button class="task-detail-close">閉じる</button>
+    </div>
+  `;
+
+  popover.querySelector('.task-detail-save').addEventListener('click', async () => {
+    const title = popover.querySelector('.task-detail-input').value.trim();
+    const description = popover.querySelector('.task-detail-textarea').value;
+    const status = popover.querySelector('.task-detail-select').value;
+    const start_date = popover.querySelector('.kanban-popover-start').value;
+    const due_date = popover.querySelector('.kanban-popover-due').value;
+    if (!title) { alert('タイトルは必須です'); return; }
+
+    const res = await fetch(`/api/tasks/${task.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, description, status, start_date, due_date }),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      alert(err.error || '更新に失敗しました');
+      return;
+    }
+    closeKanbanTaskDetail();
+    await loadKanbanData();
+  });
+
+  popover.querySelector('.task-detail-close').addEventListener('click', closeKanbanTaskDetail);
+
+  const assignBtn = popover.querySelector('.task-detail-assign');
+  if (assignBtn) {
+    assignBtn.addEventListener('click', () => {
+      assignTaskToSession(task);
+      closeKanbanTaskDetail();
+    });
+  }
+  const assignNewBtn = popover.querySelector('.task-detail-assign-new');
+  if (assignNewBtn) {
+    assignNewBtn.addEventListener('click', () => {
+      openNewSessionAssignModal(task);
+      closeKanbanTaskDetail();
+    });
+  }
+
+  // Prevent clicks inside popover from propagating
+  popover.addEventListener('click', (e) => e.stopPropagation());
+
+  // Position the popover
+  const kanbanBody = document.getElementById('kanban-body');
+  kanbanBody.style.position = 'relative';
+  kanbanBody.appendChild(popover);
+
+  // Position near anchor card
+  if (anchorEl) {
+    const bodyRect = kanbanBody.getBoundingClientRect();
+    const anchorRect = anchorEl.getBoundingClientRect();
+    let top = anchorRect.top - bodyRect.top;
+    let left = anchorRect.right - bodyRect.left + 8;
+
+    // If overflows right, show on left side
+    if (left + 320 > bodyRect.width) {
+      left = anchorRect.left - bodyRect.left - 328;
+    }
+    if (left < 0) left = 10;
+    // Keep within vertical bounds
+    if (top + 400 > bodyRect.height) top = bodyRect.height - 410;
+    if (top < 0) top = 10;
+
+    popover.style.top = `${top}px`;
+    popover.style.left = `${left}px`;
+  } else {
+    popover.style.top = '50px';
+    popover.style.left = '50px';
+  }
+
+  // Close on outside click
+  const outsideHandler = (e) => {
+    if (!popover.contains(e.target)) {
+      closeKanbanTaskDetail();
+      document.removeEventListener('click', outsideHandler);
+    }
+  };
+  setTimeout(() => document.addEventListener('click', outsideHandler), 0);
+}
 
 function openKanbanModal() {
   populateModalProjectSelect('kanban-project-select', false, kanbanSelectedProjectValue);
@@ -2862,6 +3117,7 @@ function createKanbanCard(task) {
   `;
 
   card.addEventListener('dragstart', (e) => {
+    kanbanDragged = true;
     e.dataTransfer.setData('text/plain', String(task.id));
     e.dataTransfer.effectAllowed = 'move';
     card.classList.add('dragging');
@@ -2872,6 +3128,15 @@ function createKanbanCard(task) {
     document.querySelectorAll('.kanban-column-body.drag-over').forEach(el => {
       el.classList.remove('drag-over');
     });
+  });
+
+  card.addEventListener('click', (e) => {
+    if (kanbanDragged) {
+      kanbanDragged = false;
+      return;
+    }
+    e.stopPropagation();
+    openKanbanTaskDetail(task, card);
   });
 
   return card;
