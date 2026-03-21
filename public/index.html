@@ -14,18 +14,24 @@
         <button class="menu-item">ファイル(F)</button>
         <div class="menu-dropdown">
           <button class="menu-dropdown-item" id="btn-new">新規ターミナル</button>
+          <button class="menu-dropdown-item" id="btn-resume">セッション再開</button>
         </div>
       </div>
       <div class="menu-group">
         <button class="menu-item">表示(V)</button>
         <div class="menu-dropdown">
           <button class="menu-dropdown-item" id="btn-rename-tab">タブ名変更</button>
+          <button class="menu-dropdown-item" id="btn-tasks">タスク一覧</button>
         </div>
       </div>
       <div class="menu-group">
         <button class="menu-item">プロジェクト(P)</button>
         <div class="menu-dropdown">
           <button class="menu-dropdown-item" id="btn-projects">プロジェクト管理</button>
+          <button class="menu-dropdown-item" id="btn-tasks-menu">タスク管理</button>
+          <div class="menu-dropdown-separator"></div>
+          <button class="menu-dropdown-item" id="btn-gantt">ガントチャート</button>
+          <button class="menu-dropdown-item" id="btn-kanban">カンバンボード</button>
         </div>
       </div>
     </div>
@@ -36,19 +42,61 @@
           <button id="btn-new-tab" title="新規ターミナル">+</button>
         </div>
         <div id="terminal-container"></div>
+
+        <!-- Tab context menu -->
+        <div id="tab-context-menu" class="context-menu hidden">
+          <button class="context-menu-item" data-action="new-group">新規グループに追加</button>
+          <div id="context-menu-groups"></div>
+          <div class="context-menu-separator"></div>
+          <button class="context-menu-item" data-action="ungroup">グループから外す</button>
+          <button class="context-menu-item" data-action="change-color">グループの色変更</button>
+          <div id="context-menu-color-picker" class="hidden"></div>
+          <button class="context-menu-item" data-action="delete-group">グループ削除</button>
+        </div>
       </div>
       <div id="sidebar" class="hidden">
         <div class="sidebar-header">
-          <span>プロジェクト管理</span>
+          <div class="sidebar-tabs">
+            <button class="sidebar-tab active" data-mode="projects">プロジェクト</button>
+            <button class="sidebar-tab" data-mode="tasks">タスク</button>
+          </div>
           <button id="btn-close-sidebar" title="閉じる">&times;</button>
         </div>
-        <form id="form-new-project" class="sidebar-form">
-          <input type="text" id="input-project-name" placeholder="プロジェクト名" required>
-          <input type="text" id="input-project-dir" placeholder="ディレクトリパス" required>
-          <small class="form-hint">※ Claude Codeを起動する作業ディレクトリ</small>
-          <button type="submit">登録</button>
-        </form>
-        <div id="project-list" class="sidebar-list"></div>
+        <div id="sidebar-projects">
+          <form id="form-new-project" class="sidebar-form">
+            <input type="text" id="input-project-code" placeholder="プロジェクトコード (例: AISEC)" required pattern="[A-Za-z0-9_-]+" title="英数字、ハイフン、アンダースコアのみ">
+            <input type="text" id="input-project-name" placeholder="プロジェクト名" required>
+            <input type="text" id="input-project-dir" placeholder="ディレクトリパス" required>
+            <small class="form-hint">※ Claude Codeを起動する作業ディレクトリ</small>
+            <button type="submit">登録</button>
+          </form>
+          <div id="project-list" class="sidebar-list"></div>
+        </div>
+        <div id="sidebar-tasks" style="display:none;">
+          <div class="task-toolbar">
+            <div class="task-toolbar-row">
+              <div id="task-project-multiselect" class="multiselect">
+                <div class="multiselect-display">すべてのプロジェクト</div>
+                <div class="multiselect-dropdown"></div>
+              </div>
+              <button id="btn-refresh-tasks" class="btn-refresh" title="タスク一覧を更新">↻</button>
+            </div>
+            <div class="task-filters">
+              <label class="task-filter-check"><input type="checkbox" data-filter="todo" checked><span>未着手</span></label>
+              <label class="task-filter-check"><input type="checkbox" data-filter="in_progress" checked><span>進行中</span></label>
+              <label class="task-filter-check"><input type="checkbox" data-filter="review" checked><span>レビュー</span></label>
+              <label class="task-filter-check"><input type="checkbox" data-filter="done"><span>完了</span></label>
+            </div>
+          </div>
+          <div id="task-list" class="sidebar-list"></div>
+          <form id="form-new-task" class="sidebar-form">
+            <div class="task-create-row">
+              <select id="task-create-project-select" class="task-create-project"></select>
+              <input type="text" id="input-task-title" placeholder="タスク名を入力..." required>
+              <button type="submit">追加</button>
+            </div>
+          </form>
+        </div>
       </div>
     </div>
   </div>
@@ -62,6 +110,91 @@
         <button class="modal-close" title="閉じる">&times;</button>
       </div>
       <div id="modal-project-list" class="modal-body"></div>
+    </div>
+  </div>
+
+  <!-- Session List Modal -->
+  <div id="session-list-modal" class="modal hidden">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content">
+      <div class="modal-header">
+        <span>セッションを選択</span>
+        <button class="modal-close" title="閉じる">&times;</button>
+      </div>
+      <div id="modal-session-list" class="modal-body"></div>
+    </div>
+  </div>
+
+  <!-- Project Edit Modal -->
+  <div id="project-edit-modal" class="modal hidden">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content" style="width:440px;">
+      <div class="modal-header">
+        <span>プロジェクト編集</span>
+        <button class="modal-close" title="閉じる">&times;</button>
+      </div>
+      <div class="modal-body">
+        <form id="form-edit-project" class="project-edit-form">
+          <input type="hidden" id="edit-project-id">
+          <div class="task-detail-field">
+            <label>プロジェクト名</label>
+            <input type="text" id="edit-project-name" class="task-detail-input" required>
+          </div>
+          <div class="task-detail-field">
+            <label>プロジェクトコード</label>
+            <input type="text" id="edit-project-code" class="task-detail-input" required pattern="[A-Za-z0-9_-]+" title="英数字、ハイフン、アンダースコアのみ">
+          </div>
+          <div class="task-detail-field">
+            <label>対象ディレクトリ</label>
+            <input type="text" id="edit-project-dir" class="task-detail-input" required>
+          </div>
+          <div class="task-detail-field">
+            <label>備考</label>
+            <textarea id="edit-project-notes" class="task-detail-textarea" rows="3"></textarea>
+          </div>
+          <div class="task-detail-actions">
+            <button type="button" class="task-detail-close" id="edit-project-cancel">キャンセル</button>
+            <button type="submit" class="task-detail-save">保存</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Gantt Chart Modal -->
+  <div id="gantt-modal" class="modal hidden">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content modal-large">
+      <div class="modal-header">
+        <span>ガントチャート</span>
+        <div class="modal-header-controls">
+          <select id="gantt-project-select" class="modal-select"></select>
+          <label class="gantt-filter-check"><input type="checkbox" id="gantt-show-no-date"><span>日付なしも表示</span></label>
+          <label class="gantt-filter-check"><input type="checkbox" id="gantt-hide-done" checked><span>完了を非表示</span></label>
+          <button id="gantt-add-task-btn" class="gantt-header-add-btn" title="タスク追加">+ タスク追加</button>
+          <button class="modal-close" title="閉じる">&times;</button>
+        </div>
+      </div>
+      <div class="modal-body" id="gantt-body">
+        <div id="gantt-container"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Kanban Board Modal -->
+  <div id="kanban-modal" class="modal hidden">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content modal-large">
+      <div class="modal-header">
+        <span>カンバンボード</span>
+        <div class="modal-header-controls">
+          <select id="kanban-project-select" class="modal-select"></select>
+          <button class="modal-close" title="閉じる">&times;</button>
+        </div>
+      </div>
+      <div class="modal-body" id="kanban-body">
+        <div id="kanban-container"></div>
+      </div>
     </div>
   </div>
 
